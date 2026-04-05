@@ -110,10 +110,14 @@ TECHNICAL RULES:
 - Output ONLY valid Python code, no explanations, no markdown
 - Save the final image to the path stored in the OUTPUT_PATH environment variable
 - Only use PIL and cairo — no other graphics libraries
-- Default canvas: 3840x2160 (4K) for posters, 2160x2160 for social, 2048x2048 for logos, 3508x4961 for print (A3 at 300dpi)
-- ALWAYS use these large sizes. Never go smaller. High resolution is non-negotiable.
+- Canvas sizes (EXACT — do not exceed these, server has limited memory):
+  Posters: 3840x2160, Social: 2160x2160, Logos: 2048x2048
+  NEVER go above 4000px on any dimension. No 300dpi print calculations.
 - Always wrap code in try/except and print errors
 - Use high-resolution rendering (no pixelation on text or shapes)
+- CRITICAL: Fonts are at /app/fonts/ — NEVER use /System/Library/Fonts/ or any macOS/Windows paths
+  Always load fonts like: ImageFont.truetype("/app/fonts/WorkSans-Bold.ttf", 120)
+  If a font fails to load, fall back to another /app/fonts/ font, NOT ImageFont.load_default()
 
 AVAILABLE FONTS (use full paths with Pillow's ImageFont.truetype()):
 {font_list}
