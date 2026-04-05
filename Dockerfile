@@ -1,9 +1,6 @@
 FROM python:3.11-slim
 
-# Install system dependencies for Pillow and Cairo
 RUN apt-get update && apt-get install -y \
-    libcairo2-dev \
-    pkg-config \
     libfreetype6-dev \
     libjpeg-dev \
     libpng-dev \

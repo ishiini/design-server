@@ -2,4 +2,3 @@ fastapi
 uvicorn
 anthropic
 Pillow
-pycairo
