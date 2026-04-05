@@ -60,18 +60,67 @@ VISUAL PRINCIPLES:
 - Anchor compositions with systematic reference markers, grid dots, crop marks,
   edition numbers — details that suggest meticulous professional production.
 
+YOU HAVE TWO RENDERING LIBRARIES — CHOOSE THE RIGHT ONE:
+
+**Cairo (pycairo)** — USE FOR:
+- Complex shapes, silhouettes, organic forms, curves, bezier paths
+- Smooth anti-aliased vector rendering at any scale
+- Path operations (combine, subtract, clip shapes)
+- Gradient fills along complex paths
+- Anything that needs smooth, curved, or freeform shapes
+- Movie posters, album covers, illustrations with figurative elements
+- Import as: import cairo
+
+**Pillow (PIL)** — USE FOR:
+- Geometric patterns, grids, dot arrays, parallel lines
+- Text rendering with custom fonts (Pillow has better font support)
+- Pixel-level textures: grain, noise, scanlines, halftone
+- Image compositing and alpha blending
+- Simple rectangles, circles, and color fields
+- Import as: from PIL import Image, ImageDraw, ImageFont, ImageFilter
+
+**COMBINE BOTH** for best results:
+- Render complex shapes with Cairo to a temporary PNG
+- Load that PNG into Pillow with Image.open()
+- Add text, textures, grain, and fine details with Pillow
+- Save final result from Pillow
+
+Example pattern for combining:
+```
+import cairo
+from PIL import Image, ImageDraw, ImageFont
+import os
+
+# Phase 1: Cairo for complex shapes
+width, height = 3840, 2160
+surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
+ctx = cairo.Context(surface)
+# ... draw complex shapes with ctx ...
+surface.write_to_png("/tmp/cairo_layer.png")
+
+# Phase 2: Pillow for text, texture, compositing
+img = Image.open("/tmp/cairo_layer.png").convert("RGBA")
+draw = ImageDraw.Draw(img)
+font = ImageFont.truetype("/app/fonts/WorkSans-Bold.ttf", 120)
+# ... add text, grain, finishing touches ...
+img.save(os.environ["OUTPUT_PATH"])
+```
+
 TECHNICAL RULES:
 - Output ONLY valid Python code, no explanations, no markdown
 - Save the final image to the path stored in the OUTPUT_PATH environment variable
-- Use PIL (from PIL import Image, ImageDraw, ImageFont, ImageFilter)
-- Do NOT import cairo, pycairo, or any library besides PIL and standard library
+- Only use PIL and cairo — no other graphics libraries
 - Default canvas: 3840x2160 (4K) for posters, 2160x2160 for social, 2048x2048 for logos, 3508x4961 for print (A3 at 300dpi)
 - ALWAYS use these large sizes. Never go smaller. High resolution is non-negotiable.
 - Always wrap code in try/except and print errors
 - Use high-resolution rendering (no pixelation on text or shapes)
 
-AVAILABLE FONTS (use full paths):
+AVAILABLE FONTS (use full paths with Pillow's ImageFont.truetype()):
 {font_list}
+
+For Cairo text, load fonts with:
+ctx.select_font_face("sans-serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+But prefer Pillow for text rendering as it supports the custom .ttf fonts above.
 
 Font guidance:
 - For elegant/editorial: InstrumentSerif, LibreBaskerville, Lora, CrimsonPro, Italiana
@@ -84,6 +133,28 @@ Font guidance:
 - For nature/parks: NationalPark
 - Mix fonts intentionally — a display font for headlines, a clean sans for labels
 
+DESIGN STRATEGY:
+- Express concepts through SYMBOLIC DESIGN not literal depiction
+  (e.g., for "fear of reflection" use a split composition, mirrored forms,
+   a fractured surface — rendered as smooth vector shapes with Cairo)
+- Use typography as a primary visual element — big, bold, architectural text
+- Create depth through overlapping layers with varying opacity
+- Texture through pixel manipulation: grain, noise, scanlines, halftone (Pillow)
+- Every shape should be drawn with exact coordinates — calculate positions mathematically
+  relative to canvas size, don't guess
+
+COMMON BUGS TO AVOID:
+- Cairo uses BGRA byte order — when loading Cairo output into Pillow, the colors
+  may be swapped. Fix by splitting channels and recombining:
+  r, g, b, a = img.split(); img = Image.merge("RGBA", (b, g, r, a))
+  OR just use surface.write_to_png() and Image.open() which handles it correctly
+- Always check that shapes don't overflow the canvas
+- When overlapping elements, draw back-to-front (background first)
+- For Cairo: always call ctx.save() before transforms and ctx.restore() after
+- For Pillow transparency: create images with mode 'RGBA' and use Image.alpha_composite()
+- Test font loading with try/except and fall back to default if font file not found
+- When drawing text with Pillow, use draw.textbbox() to measure text size before positioning
+
 CRAFTSMANSHIP CHECK:
 Before finalizing code, verify:
 1. Does every element serve a purpose?
@@ -91,7 +162,8 @@ Before finalizing code, verify:
 3. Are colors harmonious and limited?
 4. Does typography create clear hierarchy?
 5. Would this look impressive printed at large scale?
-6. Take a second pass — refine what exists rather than adding more.
+6. Are all coordinates calculated mathematically (centered, aligned to grid)?
+7. Take a second pass — refine what exists rather than adding more.
 """
 
     message = client.messages.create(

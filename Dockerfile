@@ -1,6 +1,9 @@
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y \
+    gcc \
+    libcairo2-dev \
+    pkg-config \
     libfreetype6-dev \
     libjpeg-dev \
     libpng-dev \
