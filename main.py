@@ -148,6 +148,17 @@ DESIGN STRATEGY:
   relative to canvas size, don't guess
 
 COMMON BUGS TO AVOID:
+- TEXT CLIPPING (CRITICAL): ALWAYS measure text width before drawing. Use this pattern:
+  font = ImageFont.truetype("/app/fonts/SomeFont.ttf", size)
+  bbox = draw.textbbox((0, 0), text, font=font)
+  text_width = bbox[2] - bbox[0]
+  max_width = canvas_width - left_margin - right_margin
+  if text_width > max_width:
+      # Scale down the font size proportionally
+      size = int(size * max_width / text_width)
+      font = ImageFont.truetype("/app/fonts/SomeFont.ttf", size)
+  NEVER place text without first verifying it fits within canvas_width minus both margins.
+  This applies to EVERY text element — titles, subtitles, labels, everything.
 - Cairo uses BGRA byte order — when loading Cairo output into Pillow, the colors
   may be swapped. Fix by splitting channels and recombining:
   r, g, b, a = img.split(); img = Image.merge("RGBA", (b, g, r, a))
@@ -158,6 +169,7 @@ COMMON BUGS TO AVOID:
 - For Pillow transparency: create images with mode 'RGBA' and use Image.alpha_composite()
 - Test font loading with try/except and fall back to default if font file not found
 - When drawing text with Pillow, use draw.textbbox() to measure text size before positioning
+  and SCALE DOWN if it would exceed the available width
 
 CRAFTSMANSHIP CHECK:
 Before finalizing code, verify:
@@ -171,7 +183,7 @@ Before finalizing code, verify:
 """
 
     message = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-opus-4-20250514",
         max_tokens=8192,
         system=system_prompt,
         messages=[
