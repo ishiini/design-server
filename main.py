@@ -248,10 +248,28 @@ async def generate_design(request: dict):
                 "code": code
             }
 
-        # Read the first-pass image
+        # Read the first-pass image and compress for review if needed
+        from PIL import Image as PILImage
+        import io
+
         with open(result, "rb") as f:
             first_pass_data = f.read()
+
+        # If image exceeds 4.5MB, resize it down for the review pass
+        # (Anthropic API limit is 5MB, leave some headroom)
+        review_data = first_pass_data
+        if len(first_pass_data) > 4_500_000:
+            img_for_review = PILImage.open(io.BytesIO(first_pass_data))
+            # Scale down to 60% to reduce file size
+            new_w = int(img_for_review.width * 0.6)
+            new_h = int(img_for_review.height * 0.6)
+            img_for_review = img_for_review.resize((new_w, new_h), PILImage.LANCZOS)
+            buf = io.BytesIO()
+            img_for_review.save(buf, format="PNG")
+            review_data = buf.getvalue()
+
         first_pass_b64 = base64.b64encode(first_pass_data).decode()
+        review_b64 = base64.b64encode(review_data).decode()
 
         # === PASS 2: Self-review with the rendered image ===
         review_prompt = """Look at the image you just generated. You are now the art director reviewing this piece.
@@ -287,7 +305,7 @@ Output ONLY the Python code, nothing else."""
                         "source": {
                             "type": "base64",
                             "media_type": "image/png",
-                            "data": first_pass_b64
+                            "data": review_b64
                         }
                     }
                 ]}
