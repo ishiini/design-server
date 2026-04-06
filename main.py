@@ -21,22 +21,10 @@ def get_font_list():
                 fonts.append(f)
     return fonts
 
-@app.post("/generate")
-async def generate_design(request: dict):
-    """
-    Accepts a JSON body with:
-    - prompt: the design generation prompt from n8n
-    - work_type: logo, poster, etc.
-    """
-    prompt = request.get("prompt", "")
-    work_type = request.get("work_type", "poster")
 
-    available_fonts = get_font_list()
-    font_list = "\n".join(f"    - /app/fonts/{f}" for f in available_fonts)
-
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-
-    system_prompt = f"""You are a world-class designer and Python developer creating museum-quality visual art.
+def get_system_prompt(font_list):
+    """Return the system prompt for the design generator."""
+    return f"""You are a world-class designer and Python developer creating museum-quality visual art.
 
 YOUR DESIGN PHILOSOPHY:
 Before writing code, think like an art director creating a design philosophy for this piece.
@@ -109,9 +97,9 @@ img.save(os.environ["OUTPUT_PATH"])
 TECHNICAL RULES:
 - Output ONLY valid Python code, no explanations, no markdown
 - Save the final image to the path stored in the OUTPUT_PATH environment variable
-- Only use PIL and cairo — no other graphics libraries
+- Only use PIL, cairo, numpy, and math — no other graphics libraries
 - Canvas sizes (EXACT — do not exceed these, server has limited memory):
-  Posters: 3840x2160, Social: 2160x2160, Logos: 2048x2048
+  Posters: 2400x3200, Social: 2160x2160, Logos: 2048x2048
   NEVER go above 4000px on any dimension. No 300dpi print calculations.
 - Always wrap code in try/except and print errors
 - Use high-resolution rendering (no pixelation on text or shapes)
@@ -159,6 +147,9 @@ COMMON BUGS TO AVOID:
       font = ImageFont.truetype("/app/fonts/SomeFont.ttf", size)
   NEVER place text without first verifying it fits within canvas_width minus both margins.
   This applies to EVERY text element — titles, subtitles, labels, everything.
+- ELEMENT OVERLAP (CRITICAL): Before placing any element, verify its bounding box does not
+  intersect with any previously placed element. Keep a running list of occupied rectangles
+  and check each new element against all existing ones.
 - Cairo uses BGRA byte order — when loading Cairo output into Pillow, the colors
   may be swapped. Fix by splitting channels and recombining:
   r, g, b, a = img.split(); img = Image.merge("RGBA", (b, g, r, a))
@@ -182,6 +173,60 @@ Before finalizing code, verify:
 7. Take a second pass — refine what exists rather than adding more.
 """
 
+
+def extract_code(response_text):
+    """Extract Python code from Claude's response."""
+    code_match = re.search(r'```python\n(.*?)```', response_text, re.DOTALL)
+    if code_match:
+        return code_match.group(1)
+    return response_text
+
+
+def execute_code(code, tmpdir):
+    """Execute the rendering code and return (success, output_path_or_error)."""
+    output_path = os.path.join(tmpdir, "output.png")
+    script_path = os.path.join(tmpdir, "render.py")
+
+    with open(script_path, "w") as f:
+        f.write(code)
+
+    env = os.environ.copy()
+    env["OUTPUT_PATH"] = output_path
+
+    result = subprocess.run(
+        ["python", script_path],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=env
+    )
+
+    if result.returncode != 0:
+        return False, result.stderr
+
+    if not os.path.exists(output_path):
+        return False, "No image file was generated"
+
+    return True, output_path
+
+
+@app.post("/generate")
+async def generate_design(request: dict):
+    """
+    Accepts a JSON body with:
+    - prompt: the design generation prompt from n8n
+    - work_type: logo, poster, etc.
+    """
+    prompt = request.get("prompt", "")
+    work_type = request.get("work_type", "poster")
+
+    available_fonts = get_font_list()
+    font_list = "\n".join(f"    - /app/fonts/{f}" for f in available_fonts)
+
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    system_prompt = get_system_prompt(font_list)
+
+    # === PASS 1: Generate initial design ===
     message = client.messages.create(
         model="claude-opus-4-20250514",
         max_tokens=8192,
@@ -191,56 +236,85 @@ Before finalizing code, verify:
         ]
     )
 
-    # Extract the Python code from Claude's response
-    response_text = message.content[0].text
+    code = extract_code(message.content[0].text)
 
-    # Try to find code between ```python ``` blocks
-    code_match = re.search(r'```python\n(.*?)```', response_text, re.DOTALL)
-    if code_match:
-        code = code_match.group(1)
-    else:
-        code = response_text
-
-    # Execute the code in a temp directory
     with tempfile.TemporaryDirectory() as tmpdir:
-        output_path = os.path.join(tmpdir, "output.png")
-        script_path = os.path.join(tmpdir, "render.py")
+        success, result = execute_code(code, tmpdir)
 
-        with open(script_path, "w") as f:
-            f.write(code)
-
-        env = os.environ.copy()
-        env["OUTPUT_PATH"] = output_path
-
-        result = subprocess.run(
-            ["python", script_path],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            env=env
-        )
-
-        if result.returncode != 0:
+        if not success:
             return {
                 "error": "Code execution failed",
-                "stderr": result.stderr,
+                "stderr": result,
                 "code": code
             }
 
-        if not os.path.exists(output_path):
+        # Read the first-pass image
+        with open(result, "rb") as f:
+            first_pass_data = f.read()
+        first_pass_b64 = base64.b64encode(first_pass_data).decode()
+
+        # === PASS 2: Self-review with the rendered image ===
+        review_prompt = """Look at the image you just generated. You are now the art director reviewing this piece.
+
+CRITIQUE the design honestly. Check for:
+- Text clipping or overflowing the canvas
+- Elements overlapping unintentionally
+- Visual clutter or density that hurts readability
+- Poor spacing, margins, or breathing room
+- Color balance — does it match the intended ratio?
+- Compositional balance — does the eye flow naturally?
+- Typography hierarchy — is it clear what to read first, second, third?
+- Does it feel like a professional, finished piece or a rough draft?
+
+Now write IMPROVED Python code that fixes every issue you identified.
+Keep what works, fix what doesn't. The goal is museum-quality output.
+Output ONLY the Python code, nothing else."""
+
+        review_message = client.messages.create(
+            model="claude-opus-4-20250514",
+            max_tokens=8192,
+            system=system_prompt,
+            messages=[
+                {"role": "user", "content": f"Create this design:\n\n{prompt}"},
+                {"role": "assistant", "content": f"```python\n{code}\n```"},
+                {"role": "user", "content": [
+                    {
+                        "type": "text",
+                        "text": review_prompt
+                    },
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": first_pass_b64
+                        }
+                    }
+                ]}
+            ]
+        )
+
+        revised_code = extract_code(review_message.content[0].text)
+
+        # Execute the revised code
+        success2, result2 = execute_code(revised_code, tmpdir)
+
+        if not success2:
+            # If the revision fails, return the first pass instead
             return {
-                "error": "No image was generated",
-                "stdout": result.stdout,
-                "stderr": result.stderr
+                "image": first_pass_b64,
+                "format": "png",
+                "code_used": code,
+                "note": "Review pass code failed, returning first pass"
             }
 
-        with open(output_path, "rb") as f:
-            image_data = base64.b64encode(f.read()).decode()
+        with open(result2, "rb") as f:
+            final_data = base64.b64encode(f.read()).decode()
 
         return {
-            "image": image_data,
+            "image": final_data,
             "format": "png",
-            "code_used": code
+            "code_used": revised_code
         }
 
 
