@@ -6,6 +6,7 @@ import tempfile
 import os
 import re
 import base64
+import io
 
 app = FastAPI()
 
@@ -22,8 +23,8 @@ def get_font_list():
     return fonts
 
 
-def get_system_prompt(font_list):
-    """Return the system prompt for the design generator."""
+def get_rendering_prompt(font_list):
+    """System prompt for Pass 2 (code rendering) and Pass 3 (review)."""
     return f"""You are a world-class designer and Python developer creating museum-quality visual art.
 
 YOUR DESIGN PHILOSOPHY:
@@ -174,6 +175,30 @@ Before finalizing code, verify:
 """
 
 
+IDEATION_SYSTEM_PROMPT = """You are a world-class creative director — the person who comes up with the big idea before anyone opens a design tool. You have encyclopedic knowledge of design history: Paul Rand, Saul Bass, Josef Müller-Brockmann, Paula Scher, Massimo Vignelli, Stefan Sagmeister, David Carson, Neville Brody, Herb Lubalin, Milton Glaser, and hundreds more.
+
+Your job is to generate ONE brilliant creative concept for a design brief. You are NOT writing code. You are NOT specifying coordinates or hex codes. You are describing a VISUAL IDEA that would make a creative director at Pentagram say "that's clever."
+
+WHAT MAKES A GREAT CONCEPT:
+- A TWIST: Something unexpected. Not the first idea that comes to mind, but the third or fourth — the one that makes people look twice.
+- DOUBLE MEANING: The best logos and posters have a dual read — you see one thing, then notice another layer of meaning. The FedEx arrow. The Spartan Golf Club golfer. The NBC peacock.
+- NEGATIVE SPACE: What you DON'T draw is as important as what you do. Can the empty space between elements form a shape? Can a letter become an object?
+- TENSION: Contrast creates interest. Big vs small. Thick vs thin. Geometric vs organic. Dense vs sparse. Dark vs light. Static vs dynamic.
+- CONCEPTUAL CONNECTION: The visual form must connect to the meaning. Don't just make something that looks nice — make something that MEANS something related to the brand/subject.
+- SIMPLICITY: The best ideas can be described in one sentence. If you need a paragraph to explain why it's clever, it's not clever enough.
+
+YOUR OUTPUT FORMAT:
+Write exactly 3 short paragraphs:
+
+CONCEPT: One sentence describing the core visual idea and what makes it clever. What will the viewer see? What's the twist or double meaning?
+
+VISUAL DESCRIPTION: Describe the key visual elements — the main shapes, how they relate to each other, the overall composition structure, the mood. Be specific about what the viewer's eye does: where does it land first, where does it travel? Do NOT use coordinates, pixel sizes, or hex codes. Describe it like you're explaining a painting to someone.
+
+EXECUTION NOTES: What rendering approach will make this concept sing? Should it be stark and minimal or layered and textured? What kind of typography treatment? What's the color strategy — monochrome for drama, complementary for energy, analogous for harmony? What level of detail and craft will elevate this from a sketch to a finished piece?
+
+Do NOT write code. Do NOT use technical specifications. Think like a creative, write like a creative."""
+
+
 def extract_code(response_text):
     """Extract Python code from Claude's response."""
     code_match = re.search(r'```python\n(.*?)```', response_text, re.DOTALL)
@@ -210,12 +235,27 @@ def execute_code(code, tmpdir):
     return True, output_path
 
 
+def compress_for_review(image_data):
+    """Compress image if it exceeds Anthropic's 5MB limit."""
+    from PIL import Image as PILImage
+    if len(image_data) > 4_500_000:
+        img = PILImage.open(io.BytesIO(image_data))
+        new_w = int(img.width * 0.6)
+        new_h = int(img.height * 0.6)
+        img = img.resize((new_w, new_h), PILImage.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+    return image_data
+
+
 @app.post("/generate")
 async def generate_design(request: dict):
     """
-    Accepts a JSON body with:
-    - prompt: the design generation prompt from n8n
-    - work_type: logo, poster, etc.
+    3-pass design generation:
+    Pass 1 — Creative Director: generates the concept/idea
+    Pass 2 — Renderer: translates concept into Python/Pillow/Cairo code
+    Pass 3 — Art Director Review: looks at the render, critiques, and improves
     """
     prompt = request.get("prompt", "")
     work_type = request.get("work_type", "poster")
@@ -224,19 +264,35 @@ async def generate_design(request: dict):
     font_list = "\n".join(f"    - /app/fonts/{f}" for f in available_fonts)
 
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    system_prompt = get_system_prompt(font_list)
+    rendering_prompt = get_rendering_prompt(font_list)
 
-    # === PASS 1: Generate initial design ===
-    message = client.messages.create(
+    # ============================================================
+    # PASS 1 — CREATIVE DIRECTOR: Generate the concept
+    # ============================================================
+    ideation_message = client.messages.create(
         model="claude-opus-4-20250514",
-        max_tokens=8192,
-        system=system_prompt,
+        max_tokens=2048,
+        system=IDEATION_SYSTEM_PROMPT,
         messages=[
-            {"role": "user", "content": f"Create this design:\n\n{prompt}"}
+            {"role": "user", "content": f"Here is the design brief:\n\n{prompt}\n\nWork type: {work_type}\n\nGenerate your creative concept."}
         ]
     )
 
-    code = extract_code(message.content[0].text)
+    creative_concept = ideation_message.content[0].text
+
+    # ============================================================
+    # PASS 2 — RENDERER: Turn the concept into code
+    # ============================================================
+    render_message = client.messages.create(
+        model="claude-opus-4-20250514",
+        max_tokens=8192,
+        system=rendering_prompt,
+        messages=[
+            {"role": "user", "content": f"A creative director has developed the following concept for this design brief. Your job is to execute this concept with exceptional craft and precision.\n\nORIGINAL BRIEF:\n{prompt}\n\nWORK TYPE: {work_type}\n\nCREATIVE CONCEPT:\n{creative_concept}\n\nNow write the Python code to render this concept. Execute the creative director's vision faithfully — do not simplify or water down their idea. Every element they described must be present and executed beautifully."}
+        ]
+    )
+
+    code = extract_code(render_message.content[0].text)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         success, result = execute_code(code, tmpdir)
@@ -245,55 +301,48 @@ async def generate_design(request: dict):
             return {
                 "error": "Code execution failed",
                 "stderr": result,
-                "code": code
+                "code": code,
+                "concept": creative_concept
             }
 
-        # Read the first-pass image and compress for review if needed
-        from PIL import Image as PILImage
-        import io
-
+        # Read the rendered image
         with open(result, "rb") as f:
-            first_pass_data = f.read()
+            render_data = f.read()
 
-        # If image exceeds 4.5MB, resize it down for the review pass
-        # (Anthropic API limit is 5MB, leave some headroom)
-        review_data = first_pass_data
-        if len(first_pass_data) > 4_500_000:
-            img_for_review = PILImage.open(io.BytesIO(first_pass_data))
-            # Scale down to 60% to reduce file size
-            new_w = int(img_for_review.width * 0.6)
-            new_h = int(img_for_review.height * 0.6)
-            img_for_review = img_for_review.resize((new_w, new_h), PILImage.LANCZOS)
-            buf = io.BytesIO()
-            img_for_review.save(buf, format="PNG")
-            review_data = buf.getvalue()
+        render_b64 = base64.b64encode(render_data).decode()
+        review_b64 = base64.b64encode(compress_for_review(render_data)).decode()
 
-        first_pass_b64 = base64.b64encode(first_pass_data).decode()
-        review_b64 = base64.b64encode(review_data).decode()
+        # ============================================================
+        # PASS 3 — ART DIRECTOR REVIEW: Critique and improve
+        # ============================================================
+        review_prompt = f"""Look at the rendered image. You are a world-class creative director at Pentagram reviewing this piece.
 
-        # === PASS 2: Self-review with the rendered image ===
-        review_prompt = """Look at the image you just generated. You are now the art director reviewing this piece.
+The original creative concept was:
+{creative_concept}
 
-CRITIQUE the design honestly. Check for:
+TECHNICAL CHECK (fix any issues):
 - Text clipping or overflowing the canvas
 - Elements overlapping unintentionally
-- Visual clutter or density that hurts readability
 - Poor spacing, margins, or breathing room
-- Color balance — does it match the intended ratio?
-- Compositional balance — does the eye flow naturally?
-- Typography hierarchy — is it clear what to read first, second, third?
-- Does it feel like a professional, finished piece or a rough draft?
+- Color balance and compositional balance
 
-Now write IMPROVED Python code that fixes every issue you identified.
-Keep what works, fix what doesn't. The goal is museum-quality output.
-Output ONLY the Python code, nothing else."""
+DESIGN QUALITY CHECK (this is the important part):
+- Does the render FAITHFULLY execute the creative concept above? If the concept described a clever twist or double meaning, is it actually visible in the image? If not, that's the #1 priority to fix.
+- Is this BORING? If a client saw this, would they be excited or underwhelmed? Be brutally honest.
+- Does the mark have TENSION and CONTRAST? Thick vs thin, geometric vs organic, solid vs open? Or is everything the same visual weight?
+- Is there CRAFT in the details? Are curves smooth and intentional? Are proportions based on a clear system?
+- Would this win an award? Would Pentagram put this in their portfolio? If not, it's not good enough.
+
+Your job is to make this piece live up to the creative concept. If the renderer simplified or watered down the idea, bring back the full vision. If technical issues are hiding the concept, fix them.
+
+Write IMPROVED Python code. Output ONLY the Python code, nothing else."""
 
         review_message = client.messages.create(
             model="claude-opus-4-20250514",
             max_tokens=8192,
-            system=system_prompt,
+            system=rendering_prompt,
             messages=[
-                {"role": "user", "content": f"Create this design:\n\n{prompt}"},
+                {"role": "user", "content": f"Execute this creative concept:\n\n{creative_concept}\n\nOriginal brief: {prompt}"},
                 {"role": "assistant", "content": f"```python\n{code}\n```"},
                 {"role": "user", "content": [
                     {
@@ -318,12 +367,13 @@ Output ONLY the Python code, nothing else."""
         success2, result2 = execute_code(revised_code, tmpdir)
 
         if not success2:
-            # If the revision fails, return the first pass instead
+            # If revision fails, return the first render
             return {
-                "image": first_pass_b64,
+                "image": render_b64,
                 "format": "png",
                 "code_used": code,
-                "note": "Review pass code failed, returning first pass"
+                "concept": creative_concept,
+                "note": "Review pass failed, returning initial render"
             }
 
         with open(result2, "rb") as f:
@@ -332,7 +382,8 @@ Output ONLY the Python code, nothing else."""
         return {
             "image": final_data,
             "format": "png",
-            "code_used": revised_code
+            "code_used": revised_code,
+            "concept": creative_concept
         }
 
 
