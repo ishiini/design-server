@@ -4,3 +4,4 @@ anthropic
 Pillow
 pycairo
 numpy
+httpx

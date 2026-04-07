@@ -7,11 +7,13 @@ import os
 import re
 import base64
 import io
+import httpx
 
 app = FastAPI()
 
 # List available fonts at startup
 FONTS_DIR = "/app/fonts"
+ASSETS_DIR = "/tmp/assets"
 
 def get_font_list():
     """Get all available .ttf fonts."""
@@ -23,8 +25,22 @@ def get_font_list():
     return fonts
 
 
-def get_rendering_prompt(font_list):
+def get_rendering_prompt(font_list, available_assets=None):
     """System prompt for Pass 2 (code rendering) and Pass 3 (review)."""
+    asset_section = ""
+    if available_assets:
+        asset_list = "\n".join(f"    - {a['path']} ({a['description']})" for a in available_assets)
+        asset_section = f"""
+AVAILABLE IMAGE ASSETS:
+The creative director requested generated imagery. These files are ready to use:
+{asset_list}
+
+Load them with: img_asset = Image.open("{available_assets[0]['path']}").convert("RGBA")
+Then resize, position, mask, color-adjust, and composite them into your design.
+You can apply filters, crop to shapes, add overlays, adjust opacity, or use them as masks.
+These are high-quality AI-generated images — treat them as raw material to art-direct into your composition.
+"""
+
     return f"""You are a world-class designer and Python developer creating museum-quality visual art.
 
 YOUR DESIGN PHILOSOPHY:
@@ -94,6 +110,8 @@ font = ImageFont.truetype("/app/fonts/WorkSans-Bold.ttf", 120)
 # ... add text, grain, finishing touches ...
 img.save(os.environ["OUTPUT_PATH"])
 ```
+
+{asset_section}
 
 TECHNICAL RULES:
 - Output ONLY valid Python code, no explanations, no markdown
@@ -188,13 +206,25 @@ WHAT MAKES A GREAT CONCEPT:
 - SIMPLICITY: The best ideas can be described in one sentence. If you need a paragraph to explain why it's clever, it's not clever enough.
 
 YOUR OUTPUT FORMAT:
-Write exactly 3 short paragraphs:
+Write exactly 4 short sections:
 
 CONCEPT: One sentence describing the core visual idea and what makes it clever. What will the viewer see? What's the twist or double meaning?
 
 VISUAL DESCRIPTION: Describe the key visual elements — the main shapes, how they relate to each other, the overall composition structure, the mood. Be specific about what the viewer's eye does: where does it land first, where does it travel? Do NOT use coordinates, pixel sizes, or hex codes. Describe it like you're explaining a painting to someone.
 
 EXECUTION NOTES: What rendering approach will make this concept sing? Should it be stark and minimal or layered and textured? What kind of typography treatment? What's the color strategy — monochrome for drama, complementary for energy, analogous for harmony? What level of detail and craft will elevate this from a sketch to a finished piece?
+
+IMAGE NEEDED: Decide whether this design needs an AI-generated image (a photograph, illustration, or complex object that cannot be drawn with geometric code). If yes, write a detailed image generation prompt describing exactly what you need — subject, style, angle, mood, background (prefer "on a pure white background" or "on a pure black background" for easy compositing). If no, write "None — this design is purely typographic and geometric."
+
+Examples of when to request an image:
+- A poster about trains → "IMAGE NEEDED: Minimal flat vector illustration of a modern electric locomotive in side profile, clean geometric style, solid dark silhouette, on a pure white background"
+- A poster about a jazz festival → "IMAGE NEEDED: High contrast black and white photograph of a saxophone, dramatic side lighting, isolated on pure black background"
+- A poster about architecture → "IMAGE NEEDED: Minimalist line drawing of a brutalist concrete building facade, straight-on elevation view, on pure white background"
+
+Examples of when NOT to request an image:
+- A Swiss typography poster → "IMAGE NEEDED: None — this design is purely typographic and geometric"
+- An abstract logo → "IMAGE NEEDED: None — this design is purely typographic and geometric"
+- A geometric pattern design → "IMAGE NEEDED: None — this design is purely typographic and geometric"
 
 Do NOT write code. Do NOT use technical specifications. Think like a creative, write like a creative."""
 
@@ -249,10 +279,68 @@ def compress_for_review(image_data):
     return image_data
 
 
+def parse_image_request(concept_text):
+    """Extract image generation request from creative concept."""
+    # Look for IMAGE NEEDED: section
+    match = re.search(r'IMAGE NEEDED:\s*(.+?)(?:\n\n|\Z)', concept_text, re.DOTALL)
+    if not match:
+        return None
+
+    image_desc = match.group(1).strip()
+
+    # Check if it's a "None" response
+    if image_desc.lower().startswith("none"):
+        return None
+
+    return image_desc
+
+
+def generate_image_asset(image_prompt, tmpdir):
+    """Call DALL-E to generate an image asset. Returns path or None."""
+    openai_key = os.environ.get("OPENAI_API_KEY")
+    if not openai_key:
+        print("OPENAI_API_KEY not set, skipping image generation")
+        return None
+
+    try:
+        response = httpx.post(
+            "https://api.openai.com/v1/images/generations",
+            headers={
+                "Authorization": f"Bearer {openai_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "dall-e-3",
+                "prompt": image_prompt,
+                "n": 1,
+                "size": "1024x1024",
+                "response_format": "b64_json",
+                "quality": "standard"
+            },
+            timeout=60.0
+        )
+        response.raise_for_status()
+        data = response.json()
+        image_b64 = data["data"][0]["b64_json"]
+
+        # Save to temp file
+        os.makedirs(ASSETS_DIR, exist_ok=True)
+        asset_path = os.path.join(ASSETS_DIR, "generated_asset.png")
+        with open(asset_path, "wb") as f:
+            f.write(base64.b64decode(image_b64))
+
+        return asset_path
+
+    except Exception as e:
+        print(f"Image generation failed: {e}")
+        return None
+
+
 @app.post("/generate")
 async def generate_design(request: dict):
     """
-    3-pass design generation:
+    3-pass design generation with optional image generation:
+    Pass 0 (optional) — DALL-E: generates imagery if the concept requires it
     Pass 1 — Creative Director: generates the concept/idea
     Pass 2 — Renderer: translates concept into Python/Pillow/Cairo code
     Pass 3 — Art Director Review: looks at the render, critiques, and improves
@@ -264,7 +352,6 @@ async def generate_design(request: dict):
     font_list = "\n".join(f"    - /app/fonts/{f}" for f in available_fonts)
 
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    rendering_prompt = get_rendering_prompt(font_list)
 
     # ============================================================
     # PASS 1 — CREATIVE DIRECTOR: Generate the concept
@@ -281,14 +368,34 @@ async def generate_design(request: dict):
     creative_concept = ideation_message.content[0].text
 
     # ============================================================
+    # PASS 1.5 — IMAGE GENERATION (if needed)
+    # ============================================================
+    image_request = parse_image_request(creative_concept)
+    available_assets = []
+
+    if image_request:
+        asset_path = generate_image_asset(image_request, None)
+        if asset_path:
+            available_assets.append({
+                "path": asset_path,
+                "description": image_request
+            })
+
+    # ============================================================
     # PASS 2 — RENDERER: Turn the concept into code
     # ============================================================
+    rendering_prompt = get_rendering_prompt(font_list, available_assets if available_assets else None)
+
+    asset_note = ""
+    if available_assets:
+        asset_note = f"\n\nIMPORTANT: A generated image asset is available at {available_assets[0]['path']} — load it with Image.open() and composite it into your design. Resize, position, mask, and art-direct it as needed."
+
     render_message = client.messages.create(
         model="claude-opus-4-20250514",
         max_tokens=8192,
         system=rendering_prompt,
         messages=[
-            {"role": "user", "content": f"A creative director has developed the following concept for this design brief. Your job is to execute this concept with exceptional craft and precision.\n\nORIGINAL BRIEF:\n{prompt}\n\nWORK TYPE: {work_type}\n\nCREATIVE CONCEPT:\n{creative_concept}\n\nNow write the Python code to render this concept. Execute the creative director's vision faithfully — do not simplify or water down their idea. Every element they described must be present and executed beautifully."}
+            {"role": "user", "content": f"A creative director has developed the following concept for this design brief. Your job is to execute this concept with exceptional craft and precision.\n\nORIGINAL BRIEF:\n{prompt}\n\nWORK TYPE: {work_type}\n\nCREATIVE CONCEPT:\n{creative_concept}{asset_note}\n\nNow write the Python code to render this concept. Execute the creative director's vision faithfully — do not simplify or water down their idea. Every element they described must be present and executed beautifully."}
         ]
     )
 
@@ -390,4 +497,9 @@ Write IMPROVED Python code. Output ONLY the Python code, nothing else."""
 @app.get("/health")
 async def health():
     fonts = get_font_list()
-    return {"status": "ok", "fonts_loaded": len(fonts)}
+    openai_available = bool(os.environ.get("OPENAI_API_KEY"))
+    return {
+        "status": "ok",
+        "fonts_loaded": len(fonts),
+        "image_generation": "available" if openai_available else "not configured"
+    }
