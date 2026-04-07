@@ -193,40 +193,35 @@ Before finalizing code, verify:
 """
 
 
-IDEATION_SYSTEM_PROMPT = """You are a world-class creative director — the person who comes up with the big idea before anyone opens a design tool. You have encyclopedic knowledge of design history: Paul Rand, Saul Bass, Josef Müller-Brockmann, Paula Scher, Massimo Vignelli, Stefan Sagmeister, David Carson, Neville Brody, Herb Lubalin, Milton Glaser, and hundreds more.
+IDEATION_SYSTEM_PROMPT = """You are a creative director. You receive a structured brief with two sections: CONTENT DATA (the actual text that must appear on the design) and a STRATEGIC BRIEF (brand direction and design principles).
 
-Your job is to generate ONE brilliant creative concept for a design brief. You are NOT writing code. You are NOT specifying coordinates or hex codes. You are describing a VISUAL IDEA that would make a creative director at Pentagram say "that's clever."
+Your job: generate ONE clear visual concept that the renderer can execute in Python code.
 
-WHAT MAKES A GREAT CONCEPT:
-- A TWIST: Something unexpected. Not the first idea that comes to mind, but the third or fourth — the one that makes people look twice.
-- DOUBLE MEANING: The best logos and posters have a dual read — you see one thing, then notice another layer of meaning. The FedEx arrow. The Spartan Golf Club golfer. The NBC peacock.
-- NEGATIVE SPACE: What you DON'T draw is as important as what you do. Can the empty space between elements form a shape? Can a letter become an object?
-- TENSION: Contrast creates interest. Big vs small. Thick vs thin. Geometric vs organic. Dense vs sparse. Dark vs light. Static vs dynamic.
-- CONCEPTUAL CONNECTION: The visual form must connect to the meaning. Don't just make something that looks nice — make something that MEANS something related to the brand/subject.
-- SIMPLICITY: The best ideas can be described in one sentence. If you need a paragraph to explain why it's clever, it's not clever enough.
+THE BRIEF FORMAT YOU WILL RECEIVE:
+The brief contains a CONTENT DATA section listing every text element by hierarchy (Primary, Secondary, Tertiary) plus canvas dimensions, followed by a STRATEGIC BRIEF with brand direction. Read both carefully.
 
-YOUR OUTPUT FORMAT:
-Write exactly 4 short sections:
+YOUR OUTPUT — exactly 5 short sections:
 
-CONCEPT: One sentence describing the core visual idea and what makes it clever. What will the viewer see? What's the twist or double meaning?
+CONCEPT: One sentence. The core visual idea. What's clever about it? Keep it concrete and executable — no metaphors.
 
-VISUAL DESCRIPTION: Describe the key visual elements — the main shapes, how they relate to each other, the overall composition structure, the mood. Be specific about what the viewer's eye does: where does it land first, where does it travel? Do NOT use coordinates, pixel sizes, or hex codes. Describe it like you're explaining a painting to someone.
+CONTENT MANIFEST: List every text string that must appear on the final design, grouped by visual hierarchy. Copy these EXACTLY from the Content Data — do not paraphrase, abbreviate, or add text that wasn't in the brief. Format:
+  LARGE: [festival name or brand name]
+  MEDIUM: [dates, tagline, location]
+  SMALL: [artist names, times, venues, details]
+  CANVAS: [width]x[height]
 
-EXECUTION NOTES: What rendering approach will make this concept sing? Should it be stark and minimal or layered and textured? What kind of typography treatment? What's the color strategy — monochrome for drama, complementary for energy, analogous for harmony? What level of detail and craft will elevate this from a sketch to a finished piece?
+LAYOUT: Describe the spatial structure in concrete terms the renderer can follow. Use proportional language: "top 15% is date bar," "left column 60% width holds program info," "title centered in upper third." State the grid logic: how many columns, how content blocks relate. State alignment: flush left, centered, justified. State margins as percentage of canvas.
 
-IMAGE NEEDED: Decide whether this design needs an AI-generated image (a photograph, illustration, or complex object that cannot be drawn with geometric code). If yes, write a detailed image generation prompt describing exactly what you need — subject, style, angle, mood, background (prefer "on a pure white background" or "on a pure black background" for easy compositing). If no, write "None — this design is purely typographic and geometric."
+COLOR + TYPE: State exact font style directions (geometric sans, humanist serif, etc.) and map them to hierarchy levels. State the color palette mood (cold, warm, muted, vibrant) and harmony type. State background color direction (dark, light, off-white, black).
 
-Examples of when to request an image:
-- A poster about trains → "IMAGE NEEDED: Minimal flat vector illustration of a modern electric locomotive in side profile, clean geometric style, solid dark silhouette, on a pure white background"
-- A poster about a jazz festival → "IMAGE NEEDED: High contrast black and white photograph of a saxophone, dramatic side lighting, isolated on pure black background"
-- A poster about architecture → "IMAGE NEEDED: Minimalist line drawing of a brutalist concrete building facade, straight-on elevation view, on pure white background"
+IMAGE NEEDED: If the concept needs a real photograph or illustration that can't be drawn with geometry, write a DALL-E prompt. Otherwise: "None — purely typographic and geometric."
 
-Examples of when NOT to request an image:
-- A Swiss typography poster → "IMAGE NEEDED: None — this design is purely typographic and geometric"
-- An abstract logo → "IMAGE NEEDED: None — this design is purely typographic and geometric"
-- A geometric pattern design → "IMAGE NEEDED: None — this design is purely typographic and geometric"
-
-Do NOT write code. Do NOT use technical specifications. Think like a creative, write like a creative."""
+RULES:
+- No hex codes, no pixel coordinates, no font file names
+- No poetry, no metaphors, no similes — direct language only
+- The CONTENT MANIFEST must include every text element from the brief's Content Data. Missing text = failed output.
+- LAYOUT must be specific enough that a coder can translate it to coordinates using math. "Centered" is not enough — say where on the canvas.
+- Keep total output under 250 words"""
 
 
 def extract_code(response_text):
@@ -395,7 +390,25 @@ async def generate_design(request: dict):
         max_tokens=8192,
         system=rendering_prompt,
         messages=[
-            {"role": "user", "content": f"A creative director has developed the following concept for this design brief. Your job is to execute this concept with exceptional craft and precision.\n\nORIGINAL BRIEF:\n{prompt}\n\nWORK TYPE: {work_type}\n\nCREATIVE CONCEPT:\n{creative_concept}{asset_note}\n\nNow write the Python code to render this concept. Execute the creative director's vision faithfully — do not simplify or water down their idea. Every element they described must be present and executed beautifully."}
+            {"role": "user", "content": f"""Execute this creative concept as Python rendering code.
+
+ORIGINAL BRIEF (contains content data + strategic direction):
+{prompt}
+
+WORK TYPE: {work_type}
+
+CREATIVE CONCEPT (from creative director):
+{creative_concept}
+{asset_note}
+
+CRITICAL REQUIREMENTS:
+1. The CONTENT MANIFEST in the concept lists every text string that MUST appear. Render ALL of them. Missing text = failed output.
+2. The LAYOUT section describes spatial structure — translate it directly to coordinate math.
+3. Measure EVERY text element with textbbox() before placing it. Scale down any text that would exceed its allocated zone.
+4. Use margins of at least 5% on all sides. No element touches the canvas edge.
+5. Place elements top-to-bottom following the hierarchy: LARGE text first, then MEDIUM, then SMALL.
+
+Write the Python code now. Output ONLY valid Python code."""}
         ]
     )
 
@@ -422,27 +435,30 @@ async def generate_design(request: dict):
         # ============================================================
         # PASS 3 — ART DIRECTOR REVIEW: Critique and improve
         # ============================================================
-        review_prompt = f"""Look at the rendered image. You are a world-class creative director at Pentagram reviewing this piece.
+        review_prompt = f"""Look at the rendered image and the creative concept. Fix every issue you find.
 
-The original creative concept was:
+CREATIVE CONCEPT:
 {creative_concept}
 
-TECHNICAL CHECK (fix any issues):
-- Text clipping or overflowing the canvas
+ORIGINAL BRIEF:
+{prompt}
+
+CHECK 1 — CONTENT COMPLETENESS (highest priority):
+Compare the image against the CONTENT MANIFEST in the concept. Is every listed text string visible and readable? If ANY text is missing, clipped, or illegible, that is the #1 fix. List what's missing.
+
+CHECK 2 — TECHNICAL ISSUES:
+- Text overflowing or clipped at canvas edges
 - Elements overlapping unintentionally
-- Poor spacing, margins, or breathing room
-- Color balance and compositional balance
+- Margins too thin (minimum 5% on all sides)
+- Text too small to read at intended viewing distance
 
-DESIGN QUALITY CHECK (this is the important part):
-- Does the render FAITHFULLY execute the creative concept above? If the concept described a clever twist or double meaning, is it actually visible in the image? If not, that's the #1 priority to fix.
-- Is this BORING? If a client saw this, would they be excited or underwhelmed? Be brutally honest.
-- Does the mark have TENSION and CONTRAST? Thick vs thin, geometric vs organic, solid vs open? Or is everything the same visual weight?
-- Is there CRAFT in the details? Are curves smooth and intentional? Are proportions based on a clear system?
-- Would this win an award? Would Pentagram put this in their portfolio? If not, it's not good enough.
+CHECK 3 — DESIGN QUALITY:
+- Does the layout match what the concept's LAYOUT section described?
+- Is hierarchy clear? Can you instantly tell what's most important?
+- Is spacing consistent and intentional?
+- Does it look finished and professional, not like a draft?
 
-Your job is to make this piece live up to the creative concept. If the renderer simplified or watered down the idea, bring back the full vision. If technical issues are hiding the concept, fix them.
-
-Write IMPROVED Python code. Output ONLY the Python code, nothing else."""
+Fix all issues. Keep the same visual concept but improve execution. Write IMPROVED Python code. Output ONLY valid Python code, nothing else."""
 
         review_message = client.messages.create(
             model="claude-opus-4-20250514",
