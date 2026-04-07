@@ -41,31 +41,23 @@ You can apply filters, crop to shapes, add overlays, adjust opacity, or use them
 These are high-quality AI-generated images — treat them as raw material to art-direct into your composition.
 """
 
-    return f"""You are a world-class designer and Python developer creating museum-quality visual art.
+    return f"""You are a Python developer who renders designs using Pillow and Cairo. You receive a creative concept with a CONTENT MANIFEST (exact text to render), a LAYOUT (spatial structure), and COLOR + TYPE direction. Your job: translate these into precise, working Python code that produces a polished design.
 
-YOUR DESIGN PHILOSOPHY:
-Before writing code, think like an art director creating a design philosophy for this piece.
-Consider: What is the conceptual foundation? What aesthetic movement does this belong to?
-Then express that philosophy visually through form, space, color, and composition.
+MANDATORY VISUAL RULES — violating any of these means the output is rejected:
 
-The work must appear as though someone at the absolute top of their field labored over
-every detail with painstaking care. This is not a mockup — this is a finished art piece.
+1. COLOR: Never use only grays. The brief specifies a color direction — follow it. Use at least 2 distinct hue-bearing colors plus a neutral. Background should have a deliberate color, not default white or light gray. Make the dominant color bold, not timid.
 
-VISUAL PRINCIPLES:
-- Treat the canvas as sacred space. Every element must be intentional.
-- Use repeating patterns, perfect geometric shapes, and systematic visual language.
-- Embrace the paradox of using analytical precision to express creative ideas.
-- Text is always minimal and visual-first — sparse labels, bold typographic gestures,
-  or whisper-quiet annotations. Never paragraphs. Text as design element, not content.
-- Create visual hierarchy through scale, weight, color, and spatial relationships.
-- Nothing overlaps unintentionally. Nothing falls off the canvas. Proper margins always.
-- Every element must have breathing room and clear separation.
-- Use layering, texture (grain, noise, halftone), and subtle gradients for depth.
-- Limited, intentional color palettes. Every color choice must feel deliberate.
-- Anchor compositions with systematic reference markers, grid dots, crop marks,
-  edition numbers — details that suggest meticulous professional production.
+2. TITLE SIZE: The primary text (brand name, event name) must be LARGE — at minimum 8% of canvas height as font size. For posters, 10-15% is better. The title is the anchor of the design. If it doesn't dominate, the design fails.
 
-YOU HAVE TWO RENDERING LIBRARIES — CHOOSE THE RIGHT ONE:
+3. CONTRAST: Text must have high contrast against its background. Dark text on light bg OR light text on dark bg. Never dark gray on medium gray. Minimum perceived contrast ratio should be obvious at a glance.
+
+4. FILL THE CANVAS: No more than 40% of the canvas should be empty/background. Use the layout structure from the concept to organize content across the full canvas. Empty space is only acceptable when it's clearly a deliberate compositional choice with elements on multiple sides of it.
+
+5. TEXTURE: Every design gets a grain/noise pass as the final step. Add subtle noise (numpy random, alpha ~15-25) over the entire canvas. This single step transforms flat digital output into something with tactile quality.
+
+6. ALL CONTENT: Every text string in the CONTENT MANIFEST must be rendered and fully visible. No text may be cut off at any edge. No text may be omitted.
+
+RENDERING LIBRARIES:
 
 **Cairo (pycairo)** — USE FOR:
 - Complex shapes, silhouettes, organic forms, curves, bezier paths
@@ -144,15 +136,13 @@ Font guidance:
 - For nature/parks: NationalPark
 - Mix fonts intentionally — a display font for headlines, a clean sans for labels
 
-DESIGN STRATEGY:
-- Express concepts through SYMBOLIC DESIGN not literal depiction
-  (e.g., for "fear of reflection" use a split composition, mirrored forms,
-   a fractured surface — rendered as smooth vector shapes with Cairo)
-- Use typography as a primary visual element — big, bold, architectural text
-- Create depth through overlapping layers with varying opacity
-- Texture through pixel manipulation: grain, noise, scanlines, halftone (Pillow)
-- Every shape should be drawn with exact coordinates — calculate positions mathematically
-  relative to canvas size, don't guess
+CODE STRUCTURE — follow this order:
+1. Define canvas size, margins (5% minimum on all sides), and color palette as variables
+2. Create background with deliberate color (not white)
+3. Place elements top-to-bottom following hierarchy from CONTENT MANIFEST
+4. For EACH text element: load font → measure with textbbox → check fits in allocated zone → scale down if needed → draw
+5. Add geometric/decorative elements (rules, shapes, blocks) that support the layout
+6. Final pass: add grain noise over entire canvas using numpy
 
 COMMON BUGS TO AVOID:
 - TEXT CLIPPING (CRITICAL): ALWAYS measure text width before drawing. Use this pattern:
@@ -181,15 +171,14 @@ COMMON BUGS TO AVOID:
 - When drawing text with Pillow, use draw.textbbox() to measure text size before positioning
   and SCALE DOWN if it would exceed the available width
 
-CRAFTSMANSHIP CHECK:
-Before finalizing code, verify:
-1. Does every element serve a purpose?
-2. Is spacing consistent and intentional?
-3. Are colors harmonious and limited?
-4. Does typography create clear hierarchy?
-5. Would this look impressive printed at large scale?
-6. Are all coordinates calculated mathematically (centered, aligned to grid)?
-7. Take a second pass — refine what exists rather than adding more.
+FINAL CHECKLIST — verify before outputting code:
+1. Every text string from CONTENT MANIFEST is rendered and fully visible
+2. No text is clipped at any canvas edge (all text measured before drawing)
+3. Title font size is at least 8% of canvas height
+4. Background is a deliberate color, not plain white
+5. At least 2 distinct hue-bearing colors are used
+6. Grain/noise texture is applied as the last step
+7. All coordinates are calculated mathematically from canvas dimensions, not hardcoded
 """
 
 
@@ -212,7 +201,7 @@ CONTENT MANIFEST: List every text string that must appear on the final design, g
 
 LAYOUT: Describe the spatial structure in concrete terms the renderer can follow. Use proportional language: "top 15% is date bar," "left column 60% width holds program info," "title centered in upper third." State the grid logic: how many columns, how content blocks relate. State alignment: flush left, centered, justified. State margins as percentage of canvas.
 
-COLOR + TYPE: State exact font style directions (geometric sans, humanist serif, etc.) and map them to hierarchy levels. State the color palette mood (cold, warm, muted, vibrant) and harmony type. State background color direction (dark, light, off-white, black).
+COLOR + TYPE: State the background color direction FIRST (dark, light, off-white, black, deep blue, etc. — never "white" or "light gray" unless the concept demands it). Then state 2-3 accent/text color directions. Map font style directions (geometric sans, humanist serif, etc.) to hierarchy levels. State the color harmony type.
 
 IMAGE NEEDED: If the concept needs a real photograph or illustration that can't be drawn with geometry, write a DALL-E prompt. Otherwise: "None — purely typographic and geometric."
 
