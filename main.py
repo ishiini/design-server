@@ -43,31 +43,50 @@ These are high-quality AI-generated images — treat them as raw material to art
 
     return f"""You render designs as Python code using Pillow and Cairo. You receive a CONTENT MANIFEST, LAYOUT, and COLOR + TYPE direction. Translate these into code that produces a DESIGNED poster — not just text on a background.
 
-DESIGN MOVES — use at least 3 of these in every design. This is what separates a design from a text dump:
+THE MOST IMPORTANT THING: Every design needs a VISUAL SYSTEM — a dominant graphic element that fills 30-50% of the canvas. Without this, the output is just text on a background. The concept will specify which system to use.
 
-1. COLOR BLOCK: A bold rectangle of color that creates visual weight and zones the canvas.
-   draw.rectangle([0, 0, int(width*0.55), int(height*0.4)], fill=accent_color)
-   Place text ON TOP of color blocks for contrast. This is the #1 way to make a poster feel designed.
+VISUAL SYSTEMS — the concept will specify which to use. Code patterns:
 
-2. SCALE CONTRAST: Make the title MASSIVE (12-18% of canvas height). Make details TINY (2-3%). The dramatic difference between huge and small creates visual tension and hierarchy.
+GRID MATRIX:
+  cell = int(usable_w / cols)
+  for row in range(rows):
+      for col in range(cols):
+          x, y = margin_x + col * cell, grid_y + row * cell
+          filled = random.random() > 0.4
+          if filled: draw.rectangle([x+2, y+2, x+cell-2, y+cell-2], fill=accent)
+          else: draw.rectangle([x+2, y+2, x+cell-2, y+cell-2], outline=line_color, width=1)
 
-3. HORIZONTAL RULES: Thin lines that divide and structure the canvas. Use 1-2px weight.
-   draw.line([(margin_x, y), (width - margin_x, y)], fill=rule_color, width=2)
-   Place them between content sections, not as filler.
+CONCENTRIC RINGS:
+  cx, cy = int(width * 0.6), int(height * 0.4)
+  for i in range(num_rings, 0, -1):
+      r = i * spacing
+      draw.ellipse([cx-r, cy-r, cx+r, cy+r], outline=ring_color, width=2)
 
-4. GEOMETRIC ACCENT: One bold shape — a circle, a thick vertical bar, or a diagonal — that anchors the composition and creates asymmetry.
-   draw.ellipse([x-r, y-r, x+r, y+r], fill=accent_color)  # bold circle
-   draw.rectangle([width-int(width*0.08), 0, width, height], fill=accent_color)  # side bar
+STRIPE SYSTEM:
+  sw = int(usable_w / n)
+  for i in range(n):
+      x = margin_x + i * sw
+      draw.rectangle([x, sy, x+sw, sy+sh], fill=accent if i%2==0 else bg)
 
-5. TYPE AS SHAPE: When the title is big enough, it becomes a visual element itself. Let it fill the width. Let it touch edges (with margin). Stack words on separate lines for vertical rhythm.
+GEOMETRIC CONSTRUCTION (use Cairo for smooth curves):
+  ctx.arc(cx, cy, r, start, end); ctx.set_line_width(3); ctx.stroke()
 
-6. SPATIAL ZONES: Divide the canvas into 2-3 distinct zones by background color or density. Top zone = title (bold, sparse). Middle zone = details (dense, structured). Bottom zone = secondary info or empty breathing room.
+PHOTOGRAPHIC CENTERPIECE (when IMAGE NEEDED is not "None"):
+  img_asset = Image.open("/tmp/assets/generated_asset.png").convert("RGBA")
+  img_asset = img_asset.resize((target_w, target_h), Image.LANCZOS)
+  canvas.paste(img_asset, (x, y), img_asset)
 
-7. INFORMATION GRID: For program info (times, names, venues), use a consistent left-aligned column with fixed vertical rhythm. Each entry gets the same spacing. Align elements to invisible grid lines.
+TYPOGRAPHIC WALL:
+  Render the title at 25-40% of canvas height. Let it be the visual element itself.
 
-8. CONTRAST FLIP: Place some text in an inverted color scheme (light text on dark block, or dark text on light block within a darker canvas) to create focal points.
+The visual system occupies the MIDDLE zone (y=25% to y=70%). Title ABOVE, details BELOW.
 
-Every design MUST have: at least one color block, dramatic scale contrast between title and details, and at least one structural rule or geometric accent. Without these, the output is just a text list.
+LAYOUT RULES:
+- Title: 12-18% of canvas height. Dominates the top.
+- Visual system: 30-50% of canvas. The centerpiece.
+- Program info: stacked vertically below the visual system, one entry per line.
+- Geometric accent (vertical bar, thin line, circle): adds asymmetry. Place at an edge.
+- Grain/noise as final pass on everything.
 
 {asset_section}
 
@@ -152,15 +171,20 @@ CONTENT MANIFEST: Copy every text string from the Content Data EXACTLY. Format:
   SMALL: [details — one entry per line]
   CANVAS: [width]x[height]
 
-DESIGN MOVES: Pick 3-4 from this list and describe how they apply:
-  - COLOR BLOCK: A bold rectangle of color. State where (top third, left half, bottom strip, etc.) and what color direction.
-  - SCALE CONTRAST: How big is the title vs the details? State title as % of canvas height.
-  - HORIZONTAL RULES: Thin divider lines between sections. State how many and where.
-  - GEOMETRIC ACCENT: One bold shape (circle, vertical bar, diagonal) that creates asymmetry. State what and where.
-  - SPATIAL ZONES: How the canvas divides into 2-3 distinct areas by color or density.
-  - CONTRAST FLIP: Where light text sits on dark block or vice versa.
-  - INFORMATION GRID: How program details are structured (left-aligned, fixed rhythm, etc.)
-You must pick at least COLOR BLOCK and SCALE CONTRAST. Describe each in one sentence with proportions.
+VISUAL SYSTEM (required): Every design needs a dominant graphic element that fills 30-50% of the canvas. Pick ONE based on what fits the brief — not every brief gets a grid. Think about what visual form best expresses this specific subject:
+  - GRID MATRIX: Rows and columns of cells, some filled, some empty. Good for: data, structure, schedules, technology, music, urban themes.
+  - CONCENTRIC RINGS: Circles radiating from a point. Good for: sound, broadcast, impact, growth, focus, astronomy.
+  - STRIPE SYSTEM: Bold parallel bars of alternating color. Good for: rhythm, speed, cinema, fashion, energy.
+  - GEOMETRIC CONSTRUCTION: Overlapping arcs, circles, or angular shapes. Good for: architecture, science, precision, luxury, mathematics.
+  - TYPOGRAPHIC WALL: The title at extreme scale becoming the visual itself. Good for: bold branding, editorial, punk/brutalist aesthetics.
+  - PHOTOGRAPHIC CENTERPIECE: A DALL-E generated image composited into the layout. Good for: movie posters, product launches, nature, food, anything that needs a real object or scene.
+State which system, where it sits on the canvas, and ONE sentence explaining why it fits this brief.
+
+LAYOUT MOVES: Pick 2-3:
+  - SCALE CONTRAST: Title as % of canvas height (12-18% for posters). Details at 2-3%.
+  - SPATIAL ZONES: How the canvas divides (title zone, visual system zone, info zone).
+  - GEOMETRIC ACCENT: One bold shape (vertical bar, circle, diagonal line) for asymmetry.
+  - INFORMATION GRID: How program details are structured below the visual system.
 
 COLOR + TYPE: Background color direction FIRST (deep navy, warm charcoal, off-white, black, etc.). Then 1-2 accent colors. Map font styles to hierarchy levels (bold geometric sans for title, light sans for details, mono for times, etc.).
 
