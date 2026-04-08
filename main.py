@@ -140,17 +140,26 @@ Font guidance:
 - Mono/technical: JetBrainsMono, IBMPlexMono, GeistMono
 - Thin/minimal: PoiretOne, SmoochSans, Jura
 
-ANALYZE THE IMAGE:
-- Where are the dark areas? (good for light text)
-- Where are the light areas? (good for dark text)
-- Where is the visual focus? (don't cover it)
-- Where is breathing room? (put text there)
+ANALYZE THE IMAGE CAREFULLY BEFORE PLACING ANY TEXT:
+- Where are the DARK areas? (place LIGHT text here — white, cream)
+- Where are the LIGHT areas? (place DARK text here — black, charcoal)
+- Where is the visual focus? (NEVER cover the main graphic element with text)
+- Where is breathing room or empty space? (text goes here FIRST)
+
+CONTRAST IS THE #1 PRIORITY. Every text element must have strong contrast against the background directly behind it. If you place white text, the area behind it MUST be dark. If you place dark text, the area behind it MUST be light. If there is no area with clean contrast, you MUST set an overlay (gradient or darken) to create contrast. A poster with unreadable text is a failed poster, period.
+
+PLACEMENT STRATEGY:
+- Put text in margins, edges, or dark border areas — NOT on top of the main graphic/illustration
+- If the image has a border or frame, place text in that border
+- The title can overlap the image IF you add a strong overlay behind it
+- Program details (times, performers) should be grouped together in one clean zone, not scattered
+- If the image is mostly light, use dark text. If mostly dark, use light text.
 
 OUTPUT this exact JSON structure:
 {{
   "overlay": {{
-    "type": "none|gradient_top|gradient_bottom|darken_all",
-    "opacity": 0.3,
+    "type": "none|gradient_top|gradient_bottom|gradient_both|darken_all",
+    "opacity": 0.4,
     "color": [0, 0, 0]
   }},
   "texts": [
@@ -238,6 +247,21 @@ def render_text_on_image(image_bytes, placement):
             zone = height - start
             for y in range(start, height):
                 a = int(255 * opacity * ((y - start) / zone))
+                arr[y, :] = [oc[0], oc[1], oc[2], a]
+            overlay = PILImage.fromarray(arr, "RGBA")
+
+        elif overlay_type == "gradient_both":
+            arr = np.zeros((height, width, 4), dtype=np.uint8)
+            # Top gradient
+            zone_top = int(height * 0.35)
+            for y in range(zone_top):
+                a = int(255 * opacity * (1 - y / zone_top))
+                arr[y, :] = [oc[0], oc[1], oc[2], a]
+            # Bottom gradient
+            start_bot = int(height * 0.65)
+            zone_bot = height - start_bot
+            for y in range(start_bot, height):
+                a = int(255 * opacity * ((y - start_bot) / zone_bot))
                 arr[y, :] = [oc[0], oc[1], oc[2], a]
             overlay = PILImage.fromarray(arr, "RGBA")
 
@@ -393,6 +417,23 @@ async def generate_design(request: dict):
         print("PASS 1: Generating poster image...")
         image_bytes = generate_poster_image(prompt, work_type)
         print(f"PASS 1 complete: {len(image_bytes)} bytes")
+
+        # UPSCALE to target resolution for sharp text rendering
+        from PIL import Image as PILImage
+        target_sizes = {
+            "poster": (2400, 3200),
+            "social": (2160, 2160),
+            "logo": (2048, 2048)
+        }
+        target_w, target_h = target_sizes.get(work_type, (2400, 3200))
+        img_raw = PILImage.open(io.BytesIO(image_bytes))
+        if img_raw.width < target_w or img_raw.height < target_h:
+            print(f"Upscaling from {img_raw.width}x{img_raw.height} to {target_w}x{target_h}...")
+            img_upscaled = img_raw.resize((target_w, target_h), PILImage.LANCZOS)
+            buf = io.BytesIO()
+            img_upscaled.save(buf, format="PNG")
+            image_bytes = buf.getvalue()
+            print(f"Upscale complete: {len(image_bytes)} bytes")
 
         # PASS 2 — Text placement
         print("PASS 2: Getting text placement...")
