@@ -1,19 +1,18 @@
 from fastapi import FastAPI
-from fastapi.responses import Response
-import anthropic
-import subprocess
-import tempfile
 import os
 import re
 import base64
 import io
+import json
 import httpx
 
 app = FastAPI()
 
-# List available fonts at startup
 FONTS_DIR = "/app/fonts"
-ASSETS_DIR = "/tmp/assets"
+
+# ============================================================
+# UTILITIES
+# ============================================================
 
 def get_font_list():
     """Get all available .ttf fonts."""
@@ -25,439 +24,441 @@ def get_font_list():
     return fonts
 
 
-def get_rendering_prompt(font_list, available_assets=None):
-    """System prompt for Pass 2 (code rendering) and Pass 3 (review)."""
-    asset_section = ""
-    if available_assets:
-        asset_list = "\n".join(f"    - {a['path']} ({a['description']})" for a in available_assets)
-        asset_section = f"""
-AVAILABLE IMAGE ASSETS:
-The creative director requested generated imagery. These files are ready to use:
-{asset_list}
-
-Load them with: img_asset = Image.open("{available_assets[0]['path']}").convert("RGBA")
-Then resize, position, mask, color-adjust, and composite them into your design.
-You can apply filters, crop to shapes, add overlays, adjust opacity, or use them as masks.
-These are high-quality AI-generated images — treat them as raw material to art-direct into your composition.
-"""
-
-    return f"""You render designs as Python code using Pillow and Cairo. You receive a CONTENT MANIFEST, LAYOUT, and COLOR + TYPE direction. Translate these into code that produces a DESIGNED poster — not just text on a background.
-
-THE MOST IMPORTANT THING: Every design needs a VISUAL SYSTEM — a dominant graphic element that fills 30-50% of the canvas. Without this, the output is just text on a background. The concept will specify which system to use.
-
-VISUAL SYSTEMS — the concept will specify which to use. Code patterns:
-
-GRID MATRIX:
-  cell = int(usable_w / cols)
-  for row in range(rows):
-      for col in range(cols):
-          x, y = margin_x + col * cell, grid_y + row * cell
-          filled = random.random() > 0.4
-          if filled: draw.rectangle([x+2, y+2, x+cell-2, y+cell-2], fill=accent)
-          else: draw.rectangle([x+2, y+2, x+cell-2, y+cell-2], outline=line_color, width=1)
-
-CONCENTRIC RINGS:
-  cx, cy = int(width * 0.6), int(height * 0.4)
-  for i in range(num_rings, 0, -1):
-      r = i * spacing
-      draw.ellipse([cx-r, cy-r, cx+r, cy+r], outline=ring_color, width=2)
-
-STRIPE SYSTEM:
-  sw = int(usable_w / n)
-  for i in range(n):
-      x = margin_x + i * sw
-      draw.rectangle([x, sy, x+sw, sy+sh], fill=accent if i%2==0 else bg)
-
-GEOMETRIC CONSTRUCTION (use Cairo for smooth curves):
-  ctx.arc(cx, cy, r, start, end); ctx.set_line_width(3); ctx.stroke()
-
-PHOTOGRAPHIC CENTERPIECE (when IMAGE NEEDED is not "None"):
-  img_asset = Image.open("/tmp/assets/generated_asset.png").convert("RGBA")
-  # Scale image to fill most of the canvas — it IS the design
-  target_w = int(usable_w * 0.85)  # or wider for full-bleed
-  ratio = target_w / img_asset.width
-  target_h = int(img_asset.height * ratio)
-  img_asset = img_asset.resize((target_w, target_h), Image.LANCZOS)
-  # Position centrally in the visual zone
-  img_x = (width - target_w) // 2
-  canvas.paste(img_asset, (img_x, current_y), img_asset)
-  # Optional: add a colored border/frame, or let it bleed edge-to-edge
-  # The image should dominate 40-60% of the poster. Title above, tagline below.
-
-TYPOGRAPHIC WALL:
-  Render the title at 25-40% of canvas height. Let it be the visual element itself.
-
-The visual system occupies the MIDDLE zone (y=25% to y=70%). Title ABOVE, details BELOW.
-
-PHOTOGRAPHIC LAYOUTS: When using PHOTOGRAPHIC CENTERPIECE, the image IS the design. Make it large (40-60% of canvas height). Options:
-  - Full-bleed: image spans edge-to-edge with title overlaid in white/bold
-  - Framed: image centered with colored border, title above, credits below
-  - Cinematic: image fills top 60%, dark gradient overlay for title, tagline in lower band
-  Do NOT leave the bottom half of the poster empty. Fill it with credits, tagline, or extend the image.
-
-LAYOUT RULES:
-- Title: 12-18% of canvas height. Dominates the top.
-- Visual system: 30-50% of canvas. The centerpiece.
-- Program info: stacked vertically below the visual system, one entry per line.
-- Grain/noise as final pass on everything.
-- Do NOT add random vertical bars, horizontal lines, or geometric accents unless they serve a clear structural purpose (e.g. dividing columns, separating sections). A stray line at the edge of the poster is visual clutter, not design.
-
-{asset_section}
-
-TECHNICAL RULES:
-- Output ONLY valid Python code, no explanations, no markdown
-- Save to os.environ["OUTPUT_PATH"]
-- Libraries: PIL, cairo, numpy, math only
-- Canvas: Posters 2400x3200, Social 2160x2160, Logos 2048x2048. Never exceed 4000px.
-- Wrap code in try/except and print errors
-- Fonts at /app/fonts/ — NEVER use system font paths
-  Load: ImageFont.truetype("/app/fonts/WorkSans-Bold.ttf", 120)
-  On failure, fall back to another /app/fonts/ font, NOT ImageFont.load_default()
-
-AVAILABLE FONTS:
-{font_list}
-
-Font guidance:
-- Elegant/editorial: InstrumentSerif, LibreBaskerville, Lora, CrimsonPro, Italiana
-- Modern/clean: WorkSans, Outfit, InstrumentSans, BricolageGrotesque
-- Bold/display: BigShoulders, YoungSerif, Gloock, Boldonse, EricaOne
-- Mono/technical: JetBrainsMono, IBMPlexMono, GeistMono, RedHatMono, DMMono
-- Thin/minimal: PoiretOne, SmoochSans, Jura
-- Mix intentionally — display font for titles, clean sans for details
-
-MANDATORY: YOUR CODE MUST START WITH THIS HELPER FUNCTION.
-Copy it exactly, then use safe_text() for EVERY text element. No exceptions.
-
-```
-def safe_text(draw, text, x, y, font_path, max_size, max_w, color, anchor="lt"):
-    \"\"\"Draw text that NEVER exceeds max_w pixels wide. Auto-shrinks font if needed.\"\"\"
-    size = max_size
-    font = ImageFont.truetype(font_path, size)
-    bbox = draw.textbbox((0, 0), text, font=font)
-    tw = bbox[2] - bbox[0]
-    while tw > max_w and size > 10:
-        size = int(size * max_w / tw) - 1
-        font = ImageFont.truetype(font_path, size)
-        bbox = draw.textbbox((0, 0), text, font=font)
-        tw = bbox[2] - bbox[0]
-    draw.text((x, y), text, font=font, fill=color, anchor=anchor)
-    th = bbox[3] - bbox[1]
-    return y + th  # returns the y position BELOW this text
-```
-
-CODE STRUCTURE — follow this exact order:
-1. Import libraries, define canvas size and margins (5% min on all sides)
-   margin_x = int(width * 0.06)
-   margin_y = int(height * 0.05)
-   usable_w = width - 2 * margin_x
-2. Define safe_text() helper (above)
-3. Create background with a deliberate color
-4. Track current_y starting at margin_y. Place text TOP TO BOTTOM:
-   current_y = safe_text(draw, "TITLE", margin_x, current_y, font_path, size, usable_w, color)
-   current_y += spacing
-   current_y = safe_text(draw, "SUBTITLE", margin_x, current_y, font_path, size, usable_w, color)
-   ...and so on for every element. Each call returns the next y position.
-5. For multiple small items (like program entries), place them VERTICALLY, one per line.
-   NEVER place multiple text blocks at the same y position unless they are explicitly in columns.
-6. Add geometric/decorative elements in remaining space
-7. Final pass: grain noise
-
-CRITICAL RULES:
-- EVERY text call must go through safe_text(). No raw draw.text() calls.
-- max_w must ALWAYS be usable_w (canvas width minus both margins). Never wider.
-- Program entries (performers, times, venues) go ONE PER LINE, stacked vertically.
-- current_y must always increase. Nothing is placed above a previous element.
-- No decorative filler (ruled lines, dot grids) unless they serve the layout. Empty space is better than noise.
-- ONLY render text that appears in the CONTENT MANIFEST. Never invent labels, technical data, statistics, measurements, serial numbers, coordinates, or placeholder text. If it's not in the manifest, it does not go on the poster.
-- Never render brackets [], placeholder text like "[not specified]", or "TBD". Omit missing information entirely.
-- Fill empty space with the VISUAL SYSTEM (bigger, bolder), not with invented text or decorative lines.
-"""
-
-
-IDEATION_SYSTEM_PROMPT = """You are a creative director. You receive a structured brief and output a visual concept that a Python code renderer can execute.
-
-The brief has CONTENT DATA (text that must appear) and a STRATEGIC BRIEF (brand direction). Read both carefully.
-
-YOUR OUTPUT — exactly 5 sections:
-
-CONCEPT: One sentence. What is the visual idea? Be concrete: "The title fills the top 40% of a deep navy canvas, with a bold vermillion color block behind the program grid in the lower half." Not abstract.
-
-CONTENT MANIFEST: Copy every text string from the Content Data EXACTLY. Format:
-  LARGE: [title]
-  MEDIUM: [dates, location]
-  SMALL: [details — one entry per line]
-  CANVAS: [width]x[height]
-
-VISUAL SYSTEM (required): Every design needs a dominant graphic element that fills 30-50% of the canvas. Pick ONE based on the brief. KEY RULE: If the strategic brief says "This design requires a generated photograph/illustration," you MUST pick PHOTOGRAPHIC CENTERPIECE and write a detailed DALL-E prompt in IMAGE NEEDED.
-  - PHOTOGRAPHIC CENTERPIECE: A DALL-E generated image composited into the layout. USE THIS when the brief describes a physical scene, object, person, or atmosphere (rain, city, food, product, landscape, etc.).
-  - GRID MATRIX: Rows and columns of cells, some filled, some empty. Good for: data, structure, schedules, technology, music.
-  - CONCENTRIC RINGS: Circles radiating from a point. Good for: sound, broadcast, impact, growth, focus.
-  - STRIPE SYSTEM: Bold parallel bars of alternating color. Good for: rhythm, speed, cinema, fashion, energy.
-  - GEOMETRIC CONSTRUCTION: Overlapping arcs, circles, or angular shapes. Good for: architecture, science, precision, luxury.
-  - TYPOGRAPHIC WALL: The title at extreme scale becoming the visual itself. Good for: bold statements, editorial, brutalist aesthetics.
-State which system, where it sits on the canvas, and ONE sentence explaining why.
-
-LAYOUT MOVES: Pick 2-3:
-  - SCALE CONTRAST: Title as % of canvas height (12-18% for posters). Details at 2-3%.
-  - SPATIAL ZONES: How the canvas divides (title zone, visual system zone, info zone).
-  - GEOMETRIC ACCENT (optional, only if it serves structure): A shape that divides or frames content. Do NOT add random lines or bars just for decoration.
-  - INFORMATION GRID: How program details are structured below the visual system.
-
-COLOR + TYPE: Background color direction FIRST (deep navy, warm charcoal, off-white, black, etc.). Then 1-2 accent colors. Map font styles to hierarchy levels (bold geometric sans for title, light sans for details, mono for times, etc.).
-
-IMAGE NEEDED: DALL-E prompt if needed, or "None — purely typographic and geometric."
-
-VARIETY RULE: Do NOT always pick GRID MATRIX. Read the brief and match the visual system to the content:
-  - Music/data/schedules → GRID MATRIX or CONCENTRIC RINGS (alternate between them)
-  - Film/photography/products/food/scenes → PHOTOGRAPHIC CENTERPIECE
-  - Bold editorial/manifestos/single-word titles → TYPOGRAPHIC WALL
-  - Architecture/science/luxury → GEOMETRIC CONSTRUCTION
-  - Fashion/cinema/speed/rhythm → STRIPE SYSTEM
-  If the last 3 briefs all got the same system, pick a different one.
-
-RULES:
-- No hex codes, no pixel coordinates, no font file names
-- No poetry or metaphors — direct visual language only
-- Every text from Content Data must appear in Content Manifest
-- NEVER invent content that is not in the brief. If a director name, venue, or detail is not provided, OMIT it. Never write "[not specified]" or any placeholder.
-- NEVER add fake technical data, statistics, measurements, or labels. Only real content from the brief.
-- Keep total output under 250 words"""
-
-
-def extract_code(response_text):
-    """Extract Python code from Claude's response."""
-    code_match = re.search(r'```python\n(.*?)```', response_text, re.DOTALL)
-    if code_match:
-        return code_match.group(1)
-    return response_text
-
-
-def execute_code(code, tmpdir):
-    """Execute the rendering code and return (success, output_path_or_error)."""
-    output_path = os.path.join(tmpdir, "output.png")
-    script_path = os.path.join(tmpdir, "render.py")
-
-    with open(script_path, "w") as f:
-        f.write(code)
-
-    env = os.environ.copy()
-    env["OUTPUT_PATH"] = output_path
-
-    result = subprocess.run(
-        ["python", script_path],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        env=env
-    )
-
-    if result.returncode != 0:
-        return False, result.stderr
-
-    if not os.path.exists(output_path):
-        return False, "No image file was generated"
-
-    return True, output_path
-
-
 def compress_for_output(image_data, max_bytes=2_000_000):
-    """Compress final image for n8n response. Returns (base64_string, format).
-    n8n Cloud has tight memory limits, so keep response under ~3MB base64."""
+    """Compress final image for n8n response. Keeps under ~3MB base64."""
     from PIL import Image as PILImage
-    # Try PNG first — if small enough, keep it
     if len(image_data) <= max_bytes:
         return base64.b64encode(image_data).decode(), "png"
-    # Convert to high-quality JPEG
     img = PILImage.open(io.BytesIO(image_data)).convert("RGB")
     for quality in [90, 80, 70, 60]:
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=quality)
         if buf.tell() <= max_bytes:
             return base64.b64encode(buf.getvalue()).decode(), "jpeg"
-    # Last resort: scale down + JPEG
     img = img.resize((int(img.width * 0.7), int(img.height * 0.7)), PILImage.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=70)
     return base64.b64encode(buf.getvalue()).decode(), "jpeg"
 
 
-
-def parse_image_request(concept_text):
-    """Extract image generation request from creative concept."""
-    # Look for IMAGE NEEDED: section
-    match = re.search(r'IMAGE NEEDED:\s*(.+?)(?:\n\n|\Z)', concept_text, re.DOTALL)
-    if not match:
-        return None
-
-    image_desc = match.group(1).strip()
-
-    # Check if it's a "None" response
-    if image_desc.lower().startswith("none"):
-        return None
-
-    return image_desc
+def compress_for_vision(image_bytes, max_bytes=3_000_000):
+    """Compress image for sending to GPT-4o Vision API."""
+    from PIL import Image as PILImage
+    if len(image_bytes) <= max_bytes:
+        return base64.b64encode(image_bytes).decode(), "png"
+    img = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
+    img = img.resize((int(img.width * 0.5), int(img.height * 0.5)), PILImage.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=80)
+    return base64.b64encode(buf.getvalue()).decode(), "jpeg"
 
 
-def generate_image_asset(image_prompt, tmpdir):
-    """Call Ideogram to generate an image asset. Returns path or None."""
-    ideogram_key = os.environ.get("IDEOGRAM_API_KEY")
-    if not ideogram_key:
-        print("IDEOGRAM_API_KEY not set, skipping image generation")
-        return None
+def parse_json_response(text):
+    """Extract JSON from a GPT response that might have markdown fences."""
+    json_match = re.search(r'```(?:json)?\s*(.*?)```', text, re.DOTALL)
+    if json_match:
+        return json.loads(json_match.group(1))
+    # Try parsing the whole thing
+    # Strip any leading/trailing whitespace or text before {
+    brace_start = text.find('{')
+    if brace_start >= 0:
+        return json.loads(text[brace_start:])
+    return json.loads(text)
 
-    try:
-        response = httpx.post(
-            "https://api.ideogram.ai/generate",
-            headers={
-                "Api-Key": ideogram_key,
-                "Content-Type": "application/json"
-            },
-            json={
-                "image_request": {
-                    "prompt": image_prompt,
-                    "model": "V_2",
-                    "aspect_ratio": "ASPECT_10_16",
-                    "style_type": "DESIGN",
-                    "magic_prompt_option": "OFF",
-                    "negative_prompt": "text, letters, words, watermark, blurry, low quality, distorted"
-                }
-            },
-            timeout=90.0
-        )
-        response.raise_for_status()
-        data = response.json()
-        image_url = data["data"][0]["url"]
 
-        # Download the image from Ideogram's URL (links expire)
-        img_response = httpx.get(image_url, timeout=60.0)
-        img_response.raise_for_status()
+def openai_headers():
+    return {
+        "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
+        "Content-Type": "application/json"
+    }
 
-        os.makedirs(ASSETS_DIR, exist_ok=True)
-        asset_path = os.path.join(ASSETS_DIR, "generated_asset.png")
-        with open(asset_path, "wb") as f:
-            f.write(img_response.content)
 
-        return asset_path
+# ============================================================
+# PASS 1 — IMAGE GENERATION (gpt-image-1)
+# ============================================================
 
-    except Exception as e:
-        print(f"Image generation failed: {e}")
-        return None
+def generate_poster_image(brief, work_type):
+    """Generate the poster visual with gpt-image-1. No text in image."""
+    size_map = {
+        "poster": "1024x1536",
+        "social": "1024x1024",
+        "logo": "1024x1024"
+    }
+    size = size_map.get(work_type, "1024x1536")
 
+    image_prompt = f"""Create a professional {work_type} design background.
+
+CRITICAL: Do NOT include any text, letters, numbers, words, or typography ANYWHERE in the image. Zero text. This is purely the visual layer.
+
+Leave the top 15% and bottom 20% slightly darker, simpler, or with negative space — text will be overlaid there later and needs to be readable.
+
+Visual direction:
+{brief}
+
+Style: Professional graphic design, high production value, intentional composition, editorial quality. This should look like it was made by a top design studio, not generated by AI."""
+
+    response = httpx.post(
+        "https://api.openai.com/v1/images/generations",
+        headers=openai_headers(),
+        json={
+            "model": "gpt-image-1",
+            "prompt": image_prompt,
+            "n": 1,
+            "size": size,
+            "quality": "medium"
+        },
+        timeout=120.0
+    )
+    response.raise_for_status()
+    data = response.json()
+    return base64.b64decode(data["data"][0]["b64_json"])
+
+
+# ============================================================
+# PASS 2 — TEXT PLACEMENT (GPT-4o Vision)
+# ============================================================
+
+def get_text_placement(image_bytes, brief, work_type, font_list):
+    """GPT-4o sees the generated image and decides exactly where text goes."""
+    img_b64, img_fmt = compress_for_vision(image_bytes)
+    media_type = f"image/{img_fmt}"
+
+    prompt = f"""You are a typography director at a top design studio. You see a {work_type} background image (no text on it yet). Your job: decide exactly where text goes, what fonts to use, and what colors will read well against this specific image.
+
+DESIGN BRIEF:
+{brief}
+
+WORK TYPE: {work_type}
+
+AVAILABLE FONTS (use exact filenames from this list):
+{font_list}
+
+Font guidance:
+- Bold display titles: BigShoulders, YoungSerif, EricaOne, Boldonse, Gloock
+- Clean sans: WorkSans, Outfit, InstrumentSans, BricolageGrotesque
+- Elegant serif: InstrumentSerif, LibreBaskerville, Lora, CrimsonPro, Italiana
+- Mono/technical: JetBrainsMono, IBMPlexMono, GeistMono
+- Thin/minimal: PoiretOne, SmoochSans, Jura
+
+ANALYZE THE IMAGE:
+- Where are the dark areas? (good for light text)
+- Where are the light areas? (good for dark text)
+- Where is the visual focus? (don't cover it)
+- Where is breathing room? (put text there)
+
+OUTPUT this exact JSON structure:
+{{
+  "overlay": {{
+    "type": "none|gradient_top|gradient_bottom|darken_all",
+    "opacity": 0.3,
+    "color": [0, 0, 0]
+  }},
+  "texts": [
+    {{
+      "content": "EXACT TEXT STRING FROM BRIEF",
+      "role": "title",
+      "x_percent": 8,
+      "y_percent": 5,
+      "max_width_percent": 84,
+      "font_file": "WorkSans-Bold.ttf",
+      "size_percent": 12,
+      "color_hex": "#FFFFFF",
+      "align": "left"
+    }}
+  ]
+}}
+
+RULES:
+- size_percent = text height as % of canvas height. Title: 8-15%. Subtitle: 3-5%. Details: 1.5-3%.
+- x/y_percent = position from top-left corner as % of canvas dimensions.
+- max_width_percent = maximum text width as % of canvas width.
+- Extract ALL text from the brief. Title is always the biggest. Don't invent text not in the brief.
+- If background is busy where text goes, set overlay to improve readability.
+- Pick 2-3 fonts maximum. One for titles, one for details. Don't mix too many.
+- Be bold with the title — it should dominate.
+- Output ONLY valid JSON. No explanations."""
+
+    response = httpx.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers=openai_headers(),
+        json={
+            "model": "gpt-4o",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{media_type};base64,{img_b64}"
+                        }
+                    },
+                    {"type": "text", "text": prompt}
+                ]
+            }],
+            "max_tokens": 2048
+        },
+        timeout=60.0
+    )
+    response.raise_for_status()
+    text = response.json()["choices"][0]["message"]["content"]
+    return parse_json_response(text)
+
+
+# ============================================================
+# PASS 3 — RENDER TEXT (PIL)
+# ============================================================
+
+def render_text_on_image(image_bytes, placement):
+    """Composite text onto the poster image using PIL."""
+    from PIL import Image as PILImage, ImageDraw, ImageFont
+    import numpy as np
+
+    img = PILImage.open(io.BytesIO(image_bytes)).convert("RGBA")
+    width, height = img.size
+
+    # --- Apply overlay for text readability ---
+    overlay_spec = placement.get("overlay", {})
+    overlay_type = overlay_spec.get("type", "none")
+    if overlay_type != "none":
+        opacity = overlay_spec.get("opacity", 0.3)
+        oc = tuple(overlay_spec.get("color", [0, 0, 0]))
+        overlay = PILImage.new("RGBA", (width, height), (0, 0, 0, 0))
+
+        if overlay_type == "gradient_top":
+            arr = np.zeros((height, width, 4), dtype=np.uint8)
+            zone = int(height * 0.35)
+            for y in range(zone):
+                a = int(255 * opacity * (1 - y / zone))
+                arr[y, :] = [oc[0], oc[1], oc[2], a]
+            overlay = PILImage.fromarray(arr, "RGBA")
+
+        elif overlay_type == "gradient_bottom":
+            arr = np.zeros((height, width, 4), dtype=np.uint8)
+            start = int(height * 0.65)
+            zone = height - start
+            for y in range(start, height):
+                a = int(255 * opacity * ((y - start) / zone))
+                arr[y, :] = [oc[0], oc[1], oc[2], a]
+            overlay = PILImage.fromarray(arr, "RGBA")
+
+        elif overlay_type == "darken_all":
+            a = int(255 * opacity)
+            overlay = PILImage.new("RGBA", (width, height), (oc[0], oc[1], oc[2], a))
+
+        img = PILImage.alpha_composite(img, overlay)
+
+    # --- Place text elements ---
+    draw = ImageDraw.Draw(img)
+
+    for text_spec in placement.get("texts", []):
+        content = str(text_spec.get("content", ""))
+        if not content:
+            continue
+
+        x = int(width * text_spec.get("x_percent", 8) / 100)
+        y = int(height * text_spec.get("y_percent", 5) / 100)
+        max_w = int(width * text_spec.get("max_width_percent", 84) / 100)
+        color = text_spec.get("color_hex", "#FFFFFF")
+        font_file = text_spec.get("font_file", "WorkSans-Bold.ttf")
+        size = int(height * text_spec.get("size_percent", 5) / 100)
+        align = text_spec.get("align", "left")
+
+        # Load font with fallback chain
+        font = None
+        font_path = os.path.join(FONTS_DIR, font_file)
+        try:
+            font = ImageFont.truetype(font_path, size)
+        except Exception:
+            try:
+                font = ImageFont.truetype(os.path.join(FONTS_DIR, "WorkSans-Bold.ttf"), size)
+            except Exception:
+                font = ImageFont.load_default()
+
+        # Auto-shrink text if it exceeds max width
+        bbox = draw.textbbox((0, 0), content, font=font)
+        tw = bbox[2] - bbox[0]
+        while tw > max_w and size > 10:
+            size = int(size * max_w / tw) - 1
+            try:
+                font = ImageFont.truetype(font_path, size)
+            except Exception:
+                font = ImageFont.truetype(os.path.join(FONTS_DIR, "WorkSans-Bold.ttf"), size)
+            bbox = draw.textbbox((0, 0), content, font=font)
+            tw = bbox[2] - bbox[0]
+
+        # Handle alignment
+        draw_x = x
+        if align == "center":
+            draw_x = x + (max_w - tw) // 2
+        elif align == "right":
+            draw_x = x + max_w - tw
+
+        draw.text((draw_x, y), content, font=font, fill=color)
+
+    # --- Add subtle grain noise ---
+    img_rgb = img.convert("RGB")
+    arr = np.array(img_rgb, dtype=np.int16)
+    noise = np.random.normal(0, 4, arr.shape).astype(np.int16)
+    arr = np.clip(arr + noise, 0, 255).astype(np.uint8)
+    result = PILImage.fromarray(arr, "RGB")
+
+    buf = io.BytesIO()
+    result.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+# ============================================================
+# PASS 4 — CRITIQUE (GPT-4o Vision)
+# ============================================================
+
+def critique_design(composed_bytes, brief, work_type):
+    """GPT-4o sees the final poster and critiques it."""
+    img_b64, img_fmt = compress_for_vision(composed_bytes)
+    media_type = f"image/{img_fmt}"
+
+    response = httpx.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers=openai_headers(),
+        json={
+            "model": "gpt-4o",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{media_type};base64,{img_b64}"
+                        }
+                    },
+                    {
+                        "type": "text",
+                        "text": f"""You are a senior design director. Critique this {work_type}.
+
+Brief: {brief}
+
+Score 1-10 on:
+1. TEXT READABILITY: Can all text be clearly read?
+2. HIERARCHY: Is the title the most prominent element?
+3. COMPOSITION: Does text placement work with the image?
+4. COMPLETENESS: Is all required text present?
+5. OVERALL QUALITY: Does this look professionally designed?
+
+Output JSON:
+{{
+  "approved": true/false,
+  "score": 7,
+  "fixes": [
+    {{
+      "text_index": 0,
+      "field": "y_percent|x_percent|color_hex|size_percent|font_file",
+      "new_value": "corrected value",
+      "reason": "why"
+    }}
+  ]
+}}
+
+Score 7+ = approved. Only flag real problems. Max 3 fixes.
+Output ONLY valid JSON."""
+                    }
+                ]
+            }],
+            "max_tokens": 1024
+        },
+        timeout=60.0
+    )
+    response.raise_for_status()
+    text = response.json()["choices"][0]["message"]["content"]
+    return parse_json_response(text)
+
+
+# ============================================================
+# MAIN ENDPOINT
+# ============================================================
 
 @app.post("/generate")
 async def generate_design(request: dict):
     """
-    2-pass design generation with optional image generation:
-    Pass 0 (optional) — DALL-E: generates imagery if the concept requires it
-    Pass 1 — Creative Director (Sonnet): generates the concept/idea
-    Pass 2 — Renderer (Sonnet): translates concept into Python/Pillow/Cairo code
+    Design generation pipeline:
+    1. gpt-image-1: generates poster visual (no text)
+    2. GPT-4o Vision: sees image, outputs text placement JSON
+    3. PIL: renders text with real fonts
+    4. GPT-4o Vision: critiques result, suggests fixes
+    5. PIL: applies fixes if needed (one round max)
     """
     prompt = request.get("prompt", "")
     work_type = request.get("work_type", "poster")
 
-    available_fonts = get_font_list()
-    font_list = "\n".join(f"    - /app/fonts/{f}" for f in available_fonts)
+    try:
+        # PASS 1 — Generate poster visual
+        print("PASS 1: Generating poster image...")
+        image_bytes = generate_poster_image(prompt, work_type)
+        print(f"PASS 1 complete: {len(image_bytes)} bytes")
 
-    client = anthropic.Anthropic(
-        api_key=os.environ["ANTHROPIC_API_KEY"],
-        max_retries=3,
-    )
+        # PASS 2 — Text placement
+        print("PASS 2: Getting text placement...")
+        font_list = "\n".join(f"    - {f}" for f in get_font_list())
+        placement = get_text_placement(image_bytes, prompt, work_type, font_list)
+        print(f"PASS 2 complete: {len(placement.get('texts', []))} text elements")
 
-    MODEL = "claude-sonnet-4-20250514"
+        # PASS 3 — Render text
+        print("PASS 3: Rendering text on image...")
+        composed = render_text_on_image(image_bytes, placement)
+        print(f"PASS 3 complete: {len(composed)} bytes")
 
-    # ============================================================
-    # PASS 1 — CREATIVE DIRECTOR: Generate the concept
-    # ============================================================
-    ideation_message = client.messages.create(
-        model=MODEL,
-        max_tokens=2048,
-        system=IDEATION_SYSTEM_PROMPT,
-        messages=[
-            {"role": "user", "content": f"Here is the design brief:\n\n{prompt}\n\nWork type: {work_type}\n\nGenerate your creative concept."}
-        ]
-    )
+        # PASS 4 — Critique
+        print("PASS 4: Critiquing design...")
+        try:
+            critique = critique_design(composed, prompt, work_type)
+            score = critique.get("score", 7)
+            print(f"PASS 4 complete: score={score}, approved={critique.get('approved', True)}")
 
-    creative_concept = ideation_message.content[0].text
+            # Apply fixes if not approved (one round only)
+            if not critique.get("approved", True) and critique.get("fixes"):
+                print(f"Applying {len(critique['fixes'])} fixes...")
+                for fix in critique["fixes"]:
+                    idx = fix.get("text_index")
+                    field = fix.get("field")
+                    new_val = fix.get("new_value")
+                    texts = placement.get("texts", [])
+                    if idx is not None and field and new_val is not None and idx < len(texts):
+                        # Convert numeric strings to numbers for numeric fields
+                        if field in ("x_percent", "y_percent", "size_percent", "max_width_percent"):
+                            try:
+                                new_val = float(new_val)
+                            except (ValueError, TypeError):
+                                continue
+                        texts[idx][field] = new_val
 
-    # ============================================================
-    # PASS 1.5 — IMAGE GENERATION (if needed)
-    # ============================================================
-    image_request = parse_image_request(creative_concept)
-    available_assets = []
+                composed = render_text_on_image(image_bytes, placement)
+                print("Fix round complete")
 
-    if image_request:
-        asset_path = generate_image_asset(image_request, None)
-        if asset_path:
-            available_assets.append({
-                "path": asset_path,
-                "description": image_request
-            })
+        except Exception as e:
+            # If critique fails, just use the original composition
+            print(f"Critique failed (using original): {e}")
 
-    # ============================================================
-    # PASS 2 — RENDERER: Turn the concept into code
-    # ============================================================
-    rendering_prompt = get_rendering_prompt(font_list, available_assets if available_assets else None)
-
-    asset_note = ""
-    if available_assets:
-        asset_note = f"\n\nIMPORTANT: A generated image asset is available at {available_assets[0]['path']} — load it with Image.open() and composite it into your design. Resize, position, mask, and art-direct it as needed."
-
-    render_message = client.messages.create(
-        model=MODEL,
-        max_tokens=8192,
-        system=rendering_prompt,
-        messages=[
-            {"role": "user", "content": f"""Execute this creative concept as Python rendering code.
-
-ORIGINAL BRIEF (contains content data + strategic direction):
-{prompt}
-
-WORK TYPE: {work_type}
-
-CREATIVE CONCEPT (from creative director):
-{creative_concept}
-{asset_note}
-
-CRITICAL REQUIREMENTS:
-1. The CONTENT MANIFEST in the concept lists every text string that MUST appear. Render ALL of them. Missing text = failed output.
-2. Use the safe_text() helper for EVERY text element. No raw draw.text() calls.
-3. Use margins of at least 5% on all sides. No element touches the canvas edge.
-4. Use at least 3 DESIGN MOVES: color block, scale contrast, and one more.
-5. Place elements top-to-bottom, tracking current_y after each element.
-
-Write the Python code now. Output ONLY valid Python code."""}
-        ]
-    )
-
-    code = extract_code(render_message.content[0].text)
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        success, result = execute_code(code, tmpdir)
-
-        if not success:
-            return {
-                "error": "Code execution failed",
-                "stderr": result,
-                "code": code,
-                "concept": creative_concept
-            }
-
-        with open(result, "rb") as f:
-            render_data = f.read()
-
-        out_b64, out_fmt = compress_for_output(render_data)
+        # Compress and return
+        out_b64, out_fmt = compress_for_output(composed)
         return {
             "image": out_b64,
             "format": out_fmt
+        }
+
+    except Exception as e:
+        import traceback
+        print(f"Generation failed: {traceback.format_exc()}")
+        return {
+            "error": str(e),
+            "stderr": traceback.format_exc()
         }
 
 
 @app.get("/health")
 async def health():
     fonts = get_font_list()
-    ideogram_available = bool(os.environ.get("IDEOGRAM_API_KEY"))
+    openai_available = bool(os.environ.get("OPENAI_API_KEY"))
     return {
         "status": "ok",
         "fonts_loaded": len(fonts),
-        "image_generation": "ideogram available" if ideogram_available else "not configured"
+        "image_generation": "gpt-image-1" if openai_available else "not configured",
+        "architecture": "gpt-image-1 + gpt-4o-vision + PIL"
     }
