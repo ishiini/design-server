@@ -299,38 +299,43 @@ def parse_image_request(concept_text):
 
 
 def generate_image_asset(image_prompt, tmpdir):
-    """Call DALL-E to generate an image asset. Returns path or None."""
-    openai_key = os.environ.get("OPENAI_API_KEY")
-    if not openai_key:
-        print("OPENAI_API_KEY not set, skipping image generation")
+    """Call Ideogram to generate an image asset. Returns path or None."""
+    ideogram_key = os.environ.get("IDEOGRAM_API_KEY")
+    if not ideogram_key:
+        print("IDEOGRAM_API_KEY not set, skipping image generation")
         return None
 
     try:
         response = httpx.post(
-            "https://api.openai.com/v1/images/generations",
+            "https://api.ideogram.ai/generate",
             headers={
-                "Authorization": f"Bearer {openai_key}",
+                "Api-Key": ideogram_key,
                 "Content-Type": "application/json"
             },
             json={
-                "model": "dall-e-3",
-                "prompt": image_prompt,
-                "n": 1,
-                "size": "1024x1024",
-                "response_format": "b64_json",
-                "quality": "standard"
+                "image_request": {
+                    "prompt": image_prompt,
+                    "model": "V_2",
+                    "aspect_ratio": "ASPECT_10_16",
+                    "style_type": "DESIGN",
+                    "magic_prompt_option": "OFF",
+                    "negative_prompt": "text, letters, words, watermark, blurry, low quality, distorted"
+                }
             },
-            timeout=60.0
+            timeout=90.0
         )
         response.raise_for_status()
         data = response.json()
-        image_b64 = data["data"][0]["b64_json"]
+        image_url = data["data"][0]["url"]
 
-        # Save to temp file
+        # Download the image from Ideogram's URL (links expire)
+        img_response = httpx.get(image_url, timeout=60.0)
+        img_response.raise_for_status()
+
         os.makedirs(ASSETS_DIR, exist_ok=True)
         asset_path = os.path.join(ASSETS_DIR, "generated_asset.png")
         with open(asset_path, "wb") as f:
-            f.write(base64.b64decode(image_b64))
+            f.write(img_response.content)
 
         return asset_path
 
@@ -450,9 +455,9 @@ Write the Python code now. Output ONLY valid Python code."""}
 @app.get("/health")
 async def health():
     fonts = get_font_list()
-    openai_available = bool(os.environ.get("OPENAI_API_KEY"))
+    ideogram_available = bool(os.environ.get("IDEOGRAM_API_KEY"))
     return {
         "status": "ok",
         "fonts_loaded": len(fonts),
-        "image_generation": "available" if openai_available else "not configured"
+        "image_generation": "ideogram available" if ideogram_available else "not configured"
     }
