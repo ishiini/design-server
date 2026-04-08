@@ -326,7 +326,10 @@ async def generate_design(request: dict):
     available_fonts = get_font_list()
     font_list = "\n".join(f"    - /app/fonts/{f}" for f in available_fonts)
 
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    client = anthropic.Anthropic(
+        api_key=os.environ["ANTHROPIC_API_KEY"],
+        max_retries=3,  # auto-retry on 429 (rate limit) and 529 (overloaded)
+    )
 
     # ============================================================
     # PASS 1 — CREATIVE DIRECTOR: Generate the concept
