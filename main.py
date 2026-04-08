@@ -230,29 +230,6 @@ def compress_for_output(image_data, max_bytes=2_000_000):
     return base64.b64encode(buf.getvalue()).decode(), "jpeg"
 
 
-def compress_for_review(image_data):
-    """Compress image to stay under Anthropic's 5MB base64 limit.
-    Base64 adds ~33% overhead, so raw data must stay under ~3.5MB."""
-    from PIL import Image as PILImage
-    # Base64 inflates by ~4/3, so 3.5MB raw → ~4.7MB base64 (safe under 5MB)
-    MAX_RAW_BYTES = 3_500_000
-    if len(image_data) <= MAX_RAW_BYTES:
-        return image_data
-    img = PILImage.open(io.BytesIO(image_data)).convert("RGB")
-    # Scale down to 50%
-    new_w = int(img.width * 0.5)
-    new_h = int(img.height * 0.5)
-    img = img.resize((new_w, new_h), PILImage.LANCZOS)
-    # Use JPEG for review — much smaller than PNG, quality doesn't matter here
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=75)
-    # If still too large, compress harder
-    if buf.tell() > MAX_RAW_BYTES:
-        buf = io.BytesIO()
-        img = img.resize((int(new_w * 0.7), int(new_h * 0.7)), PILImage.LANCZOS)
-        img.save(buf, format="JPEG", quality=60)
-    return buf.getvalue()
-
 
 def parse_image_request(concept_text):
     """Extract image generation request from creative concept."""
@@ -314,11 +291,10 @@ def generate_image_asset(image_prompt, tmpdir):
 @app.post("/generate")
 async def generate_design(request: dict):
     """
-    3-pass design generation with optional image generation:
+    2-pass design generation with optional image generation:
     Pass 0 (optional) — DALL-E: generates imagery if the concept requires it
-    Pass 1 — Creative Director: generates the concept/idea
-    Pass 2 — Renderer: translates concept into Python/Pillow/Cairo code
-    Pass 3 — Art Director Review: looks at the render, critiques, and improves
+    Pass 1 — Creative Director (Sonnet): generates the concept/idea
+    Pass 2 — Renderer (Sonnet): translates concept into Python/Pillow/Cairo code
     """
     prompt = request.get("prompt", "")
     work_type = request.get("work_type", "poster")
@@ -328,14 +304,16 @@ async def generate_design(request: dict):
 
     client = anthropic.Anthropic(
         api_key=os.environ["ANTHROPIC_API_KEY"],
-        max_retries=3,  # auto-retry on 429 (rate limit) and 529 (overloaded)
+        max_retries=3,
     )
+
+    MODEL = "claude-sonnet-4-20250514"
 
     # ============================================================
     # PASS 1 — CREATIVE DIRECTOR: Generate the concept
     # ============================================================
     ideation_message = client.messages.create(
-        model="claude-opus-4-20250514",
+        model=MODEL,
         max_tokens=2048,
         system=IDEATION_SYSTEM_PROMPT,
         messages=[
@@ -369,7 +347,7 @@ async def generate_design(request: dict):
         asset_note = f"\n\nIMPORTANT: A generated image asset is available at {available_assets[0]['path']} — load it with Image.open() and composite it into your design. Resize, position, mask, and art-direct it as needed."
 
     render_message = client.messages.create(
-        model="claude-opus-4-20250514",
+        model=MODEL,
         max_tokens=8192,
         system=rendering_prompt,
         messages=[
@@ -386,10 +364,10 @@ CREATIVE CONCEPT (from creative director):
 
 CRITICAL REQUIREMENTS:
 1. The CONTENT MANIFEST in the concept lists every text string that MUST appear. Render ALL of them. Missing text = failed output.
-2. The LAYOUT section describes spatial structure — translate it directly to coordinate math.
-3. Measure EVERY text element with textbbox() before placing it. Scale down any text that would exceed its allocated zone.
-4. Use margins of at least 5% on all sides. No element touches the canvas edge.
-5. Place elements top-to-bottom following the hierarchy: LARGE text first, then MEDIUM, then SMALL.
+2. Use the safe_text() helper for EVERY text element. No raw draw.text() calls.
+3. Use margins of at least 5% on all sides. No element touches the canvas edge.
+4. Use at least 3 DESIGN MOVES: color block, scale contrast, and one more.
+5. Place elements top-to-bottom, tracking current_y after each element.
 
 Write the Python code now. Output ONLY valid Python code."""}
         ]
@@ -408,85 +386,10 @@ Write the Python code now. Output ONLY valid Python code."""}
                 "concept": creative_concept
             }
 
-        # Read the rendered image
         with open(result, "rb") as f:
             render_data = f.read()
 
-        review_data = compress_for_review(render_data)
-        review_b64 = base64.b64encode(review_data).decode()
-        # If compressed, it's JPEG; otherwise original PNG
-        review_media_type = "image/jpeg" if len(render_data) > 3_500_000 else "image/png"
-
-        # ============================================================
-        # PASS 3 — ART DIRECTOR REVIEW: Critique and improve
-        # ============================================================
-        review_prompt = f"""Look at the rendered image and the creative concept. Fix every issue you find.
-
-CREATIVE CONCEPT:
-{creative_concept}
-
-ORIGINAL BRIEF:
-{prompt}
-
-CHECK 1 — CONTENT COMPLETENESS (highest priority):
-Compare the image against the CONTENT MANIFEST in the concept. Is every listed text string visible and readable? If ANY text is missing, clipped, or illegible, that is the #1 fix. List what's missing.
-
-CHECK 2 — TECHNICAL ISSUES:
-- Text overflowing or clipped at canvas edges
-- Elements overlapping unintentionally
-- Margins too thin (minimum 5% on all sides)
-- Text too small to read at intended viewing distance
-
-CHECK 3 — DESIGN QUALITY:
-- Does the layout match what the concept's LAYOUT section described?
-- Is hierarchy clear? Can you instantly tell what's most important?
-- Is spacing consistent and intentional?
-- Does it look finished and professional, not like a draft?
-
-Fix all issues. Keep the same visual concept but improve execution. Write IMPROVED Python code. Output ONLY valid Python code, nothing else."""
-
-        review_message = client.messages.create(
-            model="claude-opus-4-20250514",
-            max_tokens=8192,
-            system=rendering_prompt,
-            messages=[
-                {"role": "user", "content": f"Execute this creative concept:\n\n{creative_concept}\n\nOriginal brief: {prompt}"},
-                {"role": "assistant", "content": f"```python\n{code}\n```"},
-                {"role": "user", "content": [
-                    {
-                        "type": "text",
-                        "text": review_prompt
-                    },
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": review_media_type,
-                            "data": review_b64
-                        }
-                    }
-                ]}
-            ]
-        )
-
-        revised_code = extract_code(review_message.content[0].text)
-
-        # Execute the revised code
-        success2, result2 = execute_code(revised_code, tmpdir)
-
-        if not success2:
-            # If revision fails, return the first render (compressed)
-            out_b64, out_fmt = compress_for_output(render_data)
-            return {
-                "image": out_b64,
-                "format": out_fmt,
-                "note": "Review pass failed, returning initial render"
-            }
-
-        with open(result2, "rb") as f:
-            final_raw = f.read()
-
-        out_b64, out_fmt = compress_for_output(final_raw)
+        out_b64, out_fmt = compress_for_output(render_data)
         return {
             "image": out_b64,
             "format": out_fmt
