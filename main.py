@@ -41,160 +41,192 @@ You can apply filters, crop to shapes, add overlays, adjust opacity, or use them
 These are high-quality AI-generated images — treat them as raw material to art-direct into your composition.
 """
 
-    return f"""You render designs as Python code using Pillow and Cairo. You receive a CONTENT MANIFEST, LAYOUT, and COLOR + TYPE direction. Translate these into code that produces a DESIGNED poster — not just text on a background.
+    return f"""You are a world-class designer and Python developer creating museum-quality visual art.
 
-THE MOST IMPORTANT THING: Every design needs a VISUAL SYSTEM — a dominant graphic element that fills 30-50% of the canvas. Without this, the output is just text on a background. The concept will specify which system to use.
+YOUR DESIGN PHILOSOPHY:
+Before writing code, think like an art director creating a design philosophy for this piece.
+Consider: What is the conceptual foundation? What aesthetic movement does this belong to?
+Then express that philosophy visually through form, space, color, and composition.
 
-VISUAL SYSTEMS — the concept will specify which to use. Code patterns:
+The work must appear as though someone at the absolute top of their field labored over
+every detail with painstaking care. This is not a mockup — this is a finished art piece.
 
-GRID MATRIX:
-  cell = int(usable_w / cols)
-  for row in range(rows):
-      for col in range(cols):
-          x, y = margin_x + col * cell, grid_y + row * cell
-          filled = random.random() > 0.4
-          if filled: draw.rectangle([x+2, y+2, x+cell-2, y+cell-2], fill=accent)
-          else: draw.rectangle([x+2, y+2, x+cell-2, y+cell-2], outline=line_color, width=1)
+VISUAL PRINCIPLES:
+- Treat the canvas as sacred space. Every element must be intentional.
+- Use repeating patterns, perfect geometric shapes, and systematic visual language.
+- Embrace the paradox of using analytical precision to express creative ideas.
+- Text is always minimal and visual-first — sparse labels, bold typographic gestures,
+  or whisper-quiet annotations. Never paragraphs. Text as design element, not content.
+- Create visual hierarchy through scale, weight, color, and spatial relationships.
+- Nothing overlaps unintentionally. Nothing falls off the canvas. Proper margins always.
+- Every element must have breathing room and clear separation.
+- Use layering, texture (grain, noise, halftone), and subtle gradients for depth.
+- Limited, intentional color palettes. Every color choice must feel deliberate.
+- Anchor compositions with systematic reference markers, grid dots, crop marks,
+  edition numbers — details that suggest meticulous professional production.
 
-CONCENTRIC RINGS:
-  cx, cy = int(width * 0.6), int(height * 0.4)
-  for i in range(num_rings, 0, -1):
-      r = i * spacing
-      draw.ellipse([cx-r, cy-r, cx+r, cy+r], outline=ring_color, width=2)
+YOU HAVE TWO RENDERING LIBRARIES — CHOOSE THE RIGHT ONE:
 
-STRIPE SYSTEM:
-  sw = int(usable_w / n)
-  for i in range(n):
-      x = margin_x + i * sw
-      draw.rectangle([x, sy, x+sw, sy+sh], fill=accent if i%2==0 else bg)
+**Cairo (pycairo)** — USE FOR:
+- Complex shapes, silhouettes, organic forms, curves, bezier paths
+- Smooth anti-aliased vector rendering at any scale
+- Path operations (combine, subtract, clip shapes)
+- Gradient fills along complex paths
+- Anything that needs smooth, curved, or freeform shapes
+- Movie posters, album covers, illustrations with figurative elements
+- Import as: import cairo
 
-GEOMETRIC CONSTRUCTION (use Cairo for smooth curves):
-  ctx.arc(cx, cy, r, start, end); ctx.set_line_width(3); ctx.stroke()
+**Pillow (PIL)** — USE FOR:
+- Geometric patterns, grids, dot arrays, parallel lines
+- Text rendering with custom fonts (Pillow has better font support)
+- Pixel-level textures: grain, noise, scanlines, halftone
+- Image compositing and alpha blending
+- Simple rectangles, circles, and color fields
+- Import as: from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-PHOTOGRAPHIC CENTERPIECE (when IMAGE NEEDED is not "None"):
-  img_asset = Image.open("/tmp/assets/generated_asset.png").convert("RGBA")
-  img_asset = img_asset.resize((target_w, target_h), Image.LANCZOS)
-  canvas.paste(img_asset, (x, y), img_asset)
+**COMBINE BOTH** for best results:
+- Render complex shapes with Cairo to a temporary PNG
+- Load that PNG into Pillow with Image.open()
+- Add text, textures, grain, and fine details with Pillow
+- Save final result from Pillow
 
-TYPOGRAPHIC WALL:
-  Render the title at 25-40% of canvas height. Let it be the visual element itself.
+Example pattern for combining:
+```
+import cairo
+from PIL import Image, ImageDraw, ImageFont
+import os
 
-The visual system occupies the MIDDLE zone (y=25% to y=70%). Title ABOVE, details BELOW.
+# Phase 1: Cairo for complex shapes
+width, height = 3840, 2160
+surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
+ctx = cairo.Context(surface)
+# ... draw complex shapes with ctx ...
+surface.write_to_png("/tmp/cairo_layer.png")
 
-LAYOUT RULES:
-- Title: 12-18% of canvas height. Dominates the top.
-- Visual system: 30-50% of canvas. The centerpiece.
-- Program info: stacked vertically below the visual system, one entry per line.
-- Geometric accent (vertical bar, thin line, circle): adds asymmetry. Place at an edge.
-- Grain/noise as final pass on everything.
+# Phase 2: Pillow for text, texture, compositing
+img = Image.open("/tmp/cairo_layer.png").convert("RGBA")
+draw = ImageDraw.Draw(img)
+font = ImageFont.truetype("/app/fonts/WorkSans-Bold.ttf", 120)
+# ... add text, grain, finishing touches ...
+img.save(os.environ["OUTPUT_PATH"])
+```
 
 {asset_section}
 
 TECHNICAL RULES:
 - Output ONLY valid Python code, no explanations, no markdown
-- Save to os.environ["OUTPUT_PATH"]
-- Libraries: PIL, cairo, numpy, math only
-- Canvas: Posters 2400x3200, Social 2160x2160, Logos 2048x2048. Never exceed 4000px.
-- Wrap code in try/except and print errors
-- Fonts at /app/fonts/ — NEVER use system font paths
-  Load: ImageFont.truetype("/app/fonts/WorkSans-Bold.ttf", 120)
-  On failure, fall back to another /app/fonts/ font, NOT ImageFont.load_default()
+- Save the final image to the path stored in the OUTPUT_PATH environment variable
+- Only use PIL, cairo, numpy, and math — no other graphics libraries
+- Canvas sizes (EXACT — do not exceed these, server has limited memory):
+  Posters: 2400x3200, Social: 2160x2160, Logos: 2048x2048
+  NEVER go above 4000px on any dimension. No 300dpi print calculations.
+- Always wrap code in try/except and print errors
+- Use high-resolution rendering (no pixelation on text or shapes)
+- CRITICAL: Fonts are at /app/fonts/ — NEVER use /System/Library/Fonts/ or any macOS/Windows paths
+  Always load fonts like: ImageFont.truetype("/app/fonts/WorkSans-Bold.ttf", 120)
+  If a font fails to load, fall back to another /app/fonts/ font, NOT ImageFont.load_default()
 
-AVAILABLE FONTS:
+AVAILABLE FONTS (use full paths with Pillow's ImageFont.truetype()):
 {font_list}
 
+For Cairo text, load fonts with:
+ctx.select_font_face("sans-serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+But prefer Pillow for text rendering as it supports the custom .ttf fonts above.
+
 Font guidance:
-- Elegant/editorial: InstrumentSerif, LibreBaskerville, Lora, CrimsonPro, Italiana
-- Modern/clean: WorkSans, Outfit, InstrumentSans, BricolageGrotesque
-- Bold/display: BigShoulders, YoungSerif, Gloock, Boldonse, EricaOne
-- Mono/technical: JetBrainsMono, IBMPlexMono, GeistMono, RedHatMono, DMMono
-- Thin/minimal: PoiretOne, SmoochSans, Jura
-- Mix intentionally — display font for titles, clean sans for details
+- For elegant/editorial: InstrumentSerif, LibreBaskerville, Lora, CrimsonPro, Italiana
+- For modern/clean: WorkSans, Outfit, InstrumentSans, BricolageGrotesque
+- For bold/display: BigShoulders, YoungSerif, Gloock, Boldonse, EricaOne
+- For mono/technical: JetBrainsMono, IBMPlexMono, GeistMono, RedHatMono, DMMono
+- For thin/minimal: PoiretOne, SmoochSans, Jura
+- For handwritten: NothingYouCouldDo
+- For pixel/retro: PixelifySans, Silkscreen
+- For nature/parks: NationalPark
+- Mix fonts intentionally — a display font for headlines, a clean sans for labels
 
-MANDATORY: YOUR CODE MUST START WITH THIS HELPER FUNCTION.
-Copy it exactly, then use safe_text() for EVERY text element. No exceptions.
+DESIGN STRATEGY:
+- Express concepts through SYMBOLIC DESIGN not literal depiction
+  (e.g., for "fear of reflection" use a split composition, mirrored forms,
+   a fractured surface — rendered as smooth vector shapes with Cairo)
+- Use typography as a primary visual element — big, bold, architectural text
+- Create depth through overlapping layers with varying opacity
+- Texture through pixel manipulation: grain, noise, scanlines, halftone (Pillow)
+- Every shape should be drawn with exact coordinates — calculate positions mathematically
+  relative to canvas size, don't guess
 
-```
-def safe_text(draw, text, x, y, font_path, max_size, max_w, color, anchor="lt"):
-    \"\"\"Draw text that NEVER exceeds max_w pixels wide. Auto-shrinks font if needed.\"\"\"
-    size = max_size
-    font = ImageFont.truetype(font_path, size)
-    bbox = draw.textbbox((0, 0), text, font=font)
-    tw = bbox[2] - bbox[0]
-    while tw > max_w and size > 10:
-        size = int(size * max_w / tw) - 1
-        font = ImageFont.truetype(font_path, size)
-        bbox = draw.textbbox((0, 0), text, font=font)
-        tw = bbox[2] - bbox[0]
-    draw.text((x, y), text, font=font, fill=color, anchor=anchor)
-    th = bbox[3] - bbox[1]
-    return y + th  # returns the y position BELOW this text
-```
+COMMON BUGS TO AVOID:
+- TEXT CLIPPING (CRITICAL): ALWAYS measure text width before drawing. Use this pattern:
+  font = ImageFont.truetype("/app/fonts/SomeFont.ttf", size)
+  bbox = draw.textbbox((0, 0), text, font=font)
+  text_width = bbox[2] - bbox[0]
+  max_width = canvas_width - left_margin - right_margin
+  if text_width > max_width:
+      # Scale down the font size proportionally
+      size = int(size * max_width / text_width)
+      font = ImageFont.truetype("/app/fonts/SomeFont.ttf", size)
+  NEVER place text without first verifying it fits within canvas_width minus both margins.
+  This applies to EVERY text element — titles, subtitles, labels, everything.
+- ELEMENT OVERLAP (CRITICAL): Before placing any element, verify its bounding box does not
+  intersect with any previously placed element. Keep a running list of occupied rectangles
+  and check each new element against all existing ones.
+- Cairo uses BGRA byte order — when loading Cairo output into Pillow, the colors
+  may be swapped. Fix by splitting channels and recombining:
+  r, g, b, a = img.split(); img = Image.merge("RGBA", (b, g, r, a))
+  OR just use surface.write_to_png() and Image.open() which handles it correctly
+- Always check that shapes don't overflow the canvas
+- When overlapping elements, draw back-to-front (background first)
+- For Cairo: always call ctx.save() before transforms and ctx.restore() after
+- For Pillow transparency: create images with mode 'RGBA' and use Image.alpha_composite()
+- Test font loading with try/except and fall back to default if font file not found
+- When drawing text with Pillow, use draw.textbbox() to measure text size before positioning
+  and SCALE DOWN if it would exceed the available width
 
-CODE STRUCTURE — follow this exact order:
-1. Import libraries, define canvas size and margins (5% min on all sides)
-   margin_x = int(width * 0.06)
-   margin_y = int(height * 0.05)
-   usable_w = width - 2 * margin_x
-2. Define safe_text() helper (above)
-3. Create background with a deliberate color
-4. Track current_y starting at margin_y. Place text TOP TO BOTTOM:
-   current_y = safe_text(draw, "TITLE", margin_x, current_y, font_path, size, usable_w, color)
-   current_y += spacing
-   current_y = safe_text(draw, "SUBTITLE", margin_x, current_y, font_path, size, usable_w, color)
-   ...and so on for every element. Each call returns the next y position.
-5. For multiple small items (like program entries), place them VERTICALLY, one per line.
-   NEVER place multiple text blocks at the same y position unless they are explicitly in columns.
-6. Add geometric/decorative elements in remaining space
-7. Final pass: grain noise
-
-CRITICAL RULES:
-- EVERY text call must go through safe_text(). No raw draw.text() calls.
-- max_w must ALWAYS be usable_w (canvas width minus both margins). Never wider.
-- Program entries (performers, times, venues) go ONE PER LINE, stacked vertically.
-- current_y must always increase. Nothing is placed above a previous element.
-- No decorative filler (ruled lines, dot grids) unless they serve the layout. Empty space is better than noise.
+CRAFTSMANSHIP CHECK:
+Before finalizing code, verify:
+1. Does every element serve a purpose?
+2. Is spacing consistent and intentional?
+3. Are colors harmonious and limited?
+4. Does typography create clear hierarchy?
+5. Would this look impressive printed at large scale?
+6. Are all coordinates calculated mathematically (centered, aligned to grid)?
+7. Take a second pass — refine what exists rather than adding more.
 """
 
 
-IDEATION_SYSTEM_PROMPT = """You are a creative director. You receive a structured brief and output a visual concept that a Python code renderer can execute.
+IDEATION_SYSTEM_PROMPT = """You are a world-class creative director — the person who comes up with the big idea before anyone opens a design tool. You have encyclopedic knowledge of design history: Paul Rand, Saul Bass, Josef Müller-Brockmann, Paula Scher, Massimo Vignelli, Stefan Sagmeister, David Carson, Neville Brody, Herb Lubalin, Milton Glaser, and hundreds more.
 
-The brief has CONTENT DATA (text that must appear) and a STRATEGIC BRIEF (brand direction). Read both carefully.
+Your job is to generate ONE brilliant creative concept for a design brief. You are NOT writing code. You are NOT specifying coordinates or hex codes. You are describing a VISUAL IDEA that would make a creative director at Pentagram say "that's clever."
 
-YOUR OUTPUT — exactly 5 sections:
+WHAT MAKES A GREAT CONCEPT:
+- A TWIST: Something unexpected. Not the first idea that comes to mind, but the third or fourth — the one that makes people look twice.
+- DOUBLE MEANING: The best logos and posters have a dual read — you see one thing, then notice another layer of meaning. The FedEx arrow. The Spartan Golf Club golfer. The NBC peacock.
+- NEGATIVE SPACE: What you DON'T draw is as important as what you do. Can the empty space between elements form a shape? Can a letter become an object?
+- TENSION: Contrast creates interest. Big vs small. Thick vs thin. Geometric vs organic. Dense vs sparse. Dark vs light. Static vs dynamic.
+- CONCEPTUAL CONNECTION: The visual form must connect to the meaning. Don't just make something that looks nice — make something that MEANS something related to the brand/subject.
+- SIMPLICITY: The best ideas can be described in one sentence. If you need a paragraph to explain why it's clever, it's not clever enough.
 
-CONCEPT: One sentence. What is the visual idea? Be concrete: "The title fills the top 40% of a deep navy canvas, with a bold vermillion color block behind the program grid in the lower half." Not abstract.
+YOUR OUTPUT FORMAT:
+Write exactly 4 short sections:
 
-CONTENT MANIFEST: Copy every text string from the Content Data EXACTLY. Format:
-  LARGE: [title]
-  MEDIUM: [dates, location]
-  SMALL: [details — one entry per line]
-  CANVAS: [width]x[height]
+CONCEPT: One sentence describing the core visual idea and what makes it clever. What will the viewer see? What's the twist or double meaning?
 
-VISUAL SYSTEM (required): Every design needs a dominant graphic element that fills 30-50% of the canvas. Pick ONE based on what fits the brief — not every brief gets a grid. Think about what visual form best expresses this specific subject:
-  - GRID MATRIX: Rows and columns of cells, some filled, some empty. Good for: data, structure, schedules, technology, music, urban themes.
-  - CONCENTRIC RINGS: Circles radiating from a point. Good for: sound, broadcast, impact, growth, focus, astronomy.
-  - STRIPE SYSTEM: Bold parallel bars of alternating color. Good for: rhythm, speed, cinema, fashion, energy.
-  - GEOMETRIC CONSTRUCTION: Overlapping arcs, circles, or angular shapes. Good for: architecture, science, precision, luxury, mathematics.
-  - TYPOGRAPHIC WALL: The title at extreme scale becoming the visual itself. Good for: bold branding, editorial, punk/brutalist aesthetics.
-  - PHOTOGRAPHIC CENTERPIECE: A DALL-E generated image composited into the layout. Good for: movie posters, product launches, nature, food, anything that needs a real object or scene.
-State which system, where it sits on the canvas, and ONE sentence explaining why it fits this brief.
+VISUAL DESCRIPTION: Describe the key visual elements — the main shapes, how they relate to each other, the overall composition structure, the mood. Be specific about what the viewer's eye does: where does it land first, where does it travel? Do NOT use coordinates, pixel sizes, or hex codes. Describe it like you're explaining a painting to someone.
 
-LAYOUT MOVES: Pick 2-3:
-  - SCALE CONTRAST: Title as % of canvas height (12-18% for posters). Details at 2-3%.
-  - SPATIAL ZONES: How the canvas divides (title zone, visual system zone, info zone).
-  - GEOMETRIC ACCENT: One bold shape (vertical bar, circle, diagonal line) for asymmetry.
-  - INFORMATION GRID: How program details are structured below the visual system.
+EXECUTION NOTES: What rendering approach will make this concept sing? Should it be stark and minimal or layered and textured? What kind of typography treatment? What's the color strategy — monochrome for drama, complementary for energy, analogous for harmony? What level of detail and craft will elevate this from a sketch to a finished piece?
 
-COLOR + TYPE: Background color direction FIRST (deep navy, warm charcoal, off-white, black, etc.). Then 1-2 accent colors. Map font styles to hierarchy levels (bold geometric sans for title, light sans for details, mono for times, etc.).
+IMAGE NEEDED: Decide whether this design needs an AI-generated image (a photograph, illustration, or complex object that cannot be drawn with geometric code). If yes, write a detailed image generation prompt describing exactly what you need — subject, style, angle, mood, background (prefer "on a pure white background" or "on a pure black background" for easy compositing). If no, write "None — this design is purely typographic and geometric."
 
-IMAGE NEEDED: DALL-E prompt if needed, or "None — purely typographic and geometric."
+Examples of when to request an image:
+- A poster about trains → "IMAGE NEEDED: Minimal flat vector illustration of a modern electric locomotive in side profile, clean geometric style, solid dark silhouette, on a pure white background"
+- A poster about a jazz festival → "IMAGE NEEDED: High contrast black and white photograph of a saxophone, dramatic side lighting, isolated on pure black background"
+- A poster about architecture → "IMAGE NEEDED: Minimalist line drawing of a brutalist concrete building facade, straight-on elevation view, on pure white background"
 
-RULES:
-- No hex codes, no pixel coordinates, no font file names
-- No poetry or metaphors — direct visual language only
-- Every text from Content Data must appear in Content Manifest
-- Keep total output under 250 words"""
+Examples of when NOT to request an image:
+- A Swiss typography poster → "IMAGE NEEDED: None — this design is purely typographic and geometric"
+- An abstract logo → "IMAGE NEEDED: None — this design is purely typographic and geometric"
+- A geometric pattern design → "IMAGE NEEDED: None — this design is purely typographic and geometric"
+
+Do NOT write code. Do NOT use technical specifications. Think like a creative, write like a creative."""
 
 
 def extract_code(response_text):
@@ -233,26 +265,18 @@ def execute_code(code, tmpdir):
     return True, output_path
 
 
-def compress_for_output(image_data, max_bytes=2_000_000):
-    """Compress final image for n8n response. Returns (base64_string, format).
-    n8n Cloud has tight memory limits, so keep response under ~3MB base64."""
+def compress_for_review(image_data):
+    """Compress image if it exceeds Anthropic's 5MB limit."""
     from PIL import Image as PILImage
-    # Try PNG first — if small enough, keep it
-    if len(image_data) <= max_bytes:
-        return base64.b64encode(image_data).decode(), "png"
-    # Convert to high-quality JPEG
-    img = PILImage.open(io.BytesIO(image_data)).convert("RGB")
-    for quality in [90, 80, 70, 60]:
+    if len(image_data) > 4_500_000:
+        img = PILImage.open(io.BytesIO(image_data))
+        new_w = int(img.width * 0.6)
+        new_h = int(img.height * 0.6)
+        img = img.resize((new_w, new_h), PILImage.LANCZOS)
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=quality)
-        if buf.tell() <= max_bytes:
-            return base64.b64encode(buf.getvalue()).decode(), "jpeg"
-    # Last resort: scale down + JPEG
-    img = img.resize((int(img.width * 0.7), int(img.height * 0.7)), PILImage.LANCZOS)
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=70)
-    return base64.b64encode(buf.getvalue()).decode(), "jpeg"
-
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+    return image_data
 
 
 def parse_image_request(concept_text):
@@ -315,10 +339,11 @@ def generate_image_asset(image_prompt, tmpdir):
 @app.post("/generate")
 async def generate_design(request: dict):
     """
-    2-pass design generation with optional image generation:
+    3-pass design generation with optional image generation:
     Pass 0 (optional) — DALL-E: generates imagery if the concept requires it
-    Pass 1 — Creative Director (Sonnet): generates the concept/idea
-    Pass 2 — Renderer (Sonnet): translates concept into Python/Pillow/Cairo code
+    Pass 1 — Creative Director: generates the concept/idea
+    Pass 2 — Renderer: translates concept into Python/Pillow/Cairo code
+    Pass 3 — Art Director Review: looks at the render, critiques, and improves
     """
     prompt = request.get("prompt", "")
     work_type = request.get("work_type", "poster")
@@ -326,18 +351,13 @@ async def generate_design(request: dict):
     available_fonts = get_font_list()
     font_list = "\n".join(f"    - /app/fonts/{f}" for f in available_fonts)
 
-    client = anthropic.Anthropic(
-        api_key=os.environ["ANTHROPIC_API_KEY"],
-        max_retries=3,
-    )
-
-    MODEL = "claude-sonnet-4-20250514"
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
     # ============================================================
     # PASS 1 — CREATIVE DIRECTOR: Generate the concept
     # ============================================================
     ideation_message = client.messages.create(
-        model=MODEL,
+        model="claude-opus-4-20250514",
         max_tokens=2048,
         system=IDEATION_SYSTEM_PROMPT,
         messages=[
@@ -371,29 +391,11 @@ async def generate_design(request: dict):
         asset_note = f"\n\nIMPORTANT: A generated image asset is available at {available_assets[0]['path']} — load it with Image.open() and composite it into your design. Resize, position, mask, and art-direct it as needed."
 
     render_message = client.messages.create(
-        model=MODEL,
+        model="claude-opus-4-20250514",
         max_tokens=8192,
         system=rendering_prompt,
         messages=[
-            {"role": "user", "content": f"""Execute this creative concept as Python rendering code.
-
-ORIGINAL BRIEF (contains content data + strategic direction):
-{prompt}
-
-WORK TYPE: {work_type}
-
-CREATIVE CONCEPT (from creative director):
-{creative_concept}
-{asset_note}
-
-CRITICAL REQUIREMENTS:
-1. The CONTENT MANIFEST in the concept lists every text string that MUST appear. Render ALL of them. Missing text = failed output.
-2. Use the safe_text() helper for EVERY text element. No raw draw.text() calls.
-3. Use margins of at least 5% on all sides. No element touches the canvas edge.
-4. Use at least 3 DESIGN MOVES: color block, scale contrast, and one more.
-5. Place elements top-to-bottom, tracking current_y after each element.
-
-Write the Python code now. Output ONLY valid Python code."""}
+            {"role": "user", "content": f"A creative director has developed the following concept for this design brief. Your job is to execute this concept with exceptional craft and precision.\n\nORIGINAL BRIEF:\n{prompt}\n\nWORK TYPE: {work_type}\n\nCREATIVE CONCEPT:\n{creative_concept}{asset_note}\n\nNow write the Python code to render this concept. Execute the creative director's vision faithfully — do not simplify or water down their idea. Every element they described must be present and executed beautifully."}
         ]
     )
 
@@ -410,13 +412,85 @@ Write the Python code now. Output ONLY valid Python code."""}
                 "concept": creative_concept
             }
 
+        # Read the rendered image
         with open(result, "rb") as f:
             render_data = f.read()
 
-        out_b64, out_fmt = compress_for_output(render_data)
+        render_b64 = base64.b64encode(render_data).decode()
+        review_b64 = base64.b64encode(compress_for_review(render_data)).decode()
+
+        # ============================================================
+        # PASS 3 — ART DIRECTOR REVIEW: Critique and improve
+        # ============================================================
+        review_prompt = f"""Look at the rendered image. You are a world-class creative director at Pentagram reviewing this piece.
+
+The original creative concept was:
+{creative_concept}
+
+TECHNICAL CHECK (fix any issues):
+- Text clipping or overflowing the canvas
+- Elements overlapping unintentionally
+- Poor spacing, margins, or breathing room
+- Color balance and compositional balance
+
+DESIGN QUALITY CHECK (this is the important part):
+- Does the render FAITHFULLY execute the creative concept above? If the concept described a clever twist or double meaning, is it actually visible in the image? If not, that's the #1 priority to fix.
+- Is this BORING? If a client saw this, would they be excited or underwhelmed? Be brutally honest.
+- Does the mark have TENSION and CONTRAST? Thick vs thin, geometric vs organic, solid vs open? Or is everything the same visual weight?
+- Is there CRAFT in the details? Are curves smooth and intentional? Are proportions based on a clear system?
+- Would this win an award? Would Pentagram put this in their portfolio? If not, it's not good enough.
+
+Your job is to make this piece live up to the creative concept. If the renderer simplified or watered down the idea, bring back the full vision. If technical issues are hiding the concept, fix them.
+
+Write IMPROVED Python code. Output ONLY the Python code, nothing else."""
+
+        review_message = client.messages.create(
+            model="claude-opus-4-20250514",
+            max_tokens=8192,
+            system=rendering_prompt,
+            messages=[
+                {"role": "user", "content": f"Execute this creative concept:\n\n{creative_concept}\n\nOriginal brief: {prompt}"},
+                {"role": "assistant", "content": f"```python\n{code}\n```"},
+                {"role": "user", "content": [
+                    {
+                        "type": "text",
+                        "text": review_prompt
+                    },
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": review_b64
+                        }
+                    }
+                ]}
+            ]
+        )
+
+        revised_code = extract_code(review_message.content[0].text)
+
+        # Execute the revised code
+        success2, result2 = execute_code(revised_code, tmpdir)
+
+        if not success2:
+            # If revision fails, return the first render
+            return {
+                "image": render_b64,
+                "format": "png",
+                "code_used": code,
+                "concept": creative_concept,
+                "note": "Review pass failed, returning initial render"
+            }
+
+        with open(result2, "rb") as f:
+            final_data = base64.b64encode(f.read()).decode()
+
         return {
-            "image": out_b64,
-            "format": out_fmt
+            "image": final_data,
+            "format": "png",
+            "code_used": revised_code,
+            "concept": creative_concept
         }
 
 
