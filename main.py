@@ -250,17 +250,27 @@ def execute_code(code, tmpdir):
 
 
 def compress_for_review(image_data):
-    """Compress image if it exceeds Anthropic's 5MB limit."""
+    """Compress image to stay under Anthropic's 5MB base64 limit.
+    Base64 adds ~33% overhead, so raw data must stay under ~3.5MB."""
     from PIL import Image as PILImage
-    if len(image_data) > 4_500_000:
-        img = PILImage.open(io.BytesIO(image_data))
-        new_w = int(img.width * 0.6)
-        new_h = int(img.height * 0.6)
-        img = img.resize((new_w, new_h), PILImage.LANCZOS)
+    # Base64 inflates by ~4/3, so 3.5MB raw → ~4.7MB base64 (safe under 5MB)
+    MAX_RAW_BYTES = 3_500_000
+    if len(image_data) <= MAX_RAW_BYTES:
+        return image_data
+    img = PILImage.open(io.BytesIO(image_data)).convert("RGB")
+    # Scale down to 50%
+    new_w = int(img.width * 0.5)
+    new_h = int(img.height * 0.5)
+    img = img.resize((new_w, new_h), PILImage.LANCZOS)
+    # Use JPEG for review — much smaller than PNG, quality doesn't matter here
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=75)
+    # If still too large, compress harder
+    if buf.tell() > MAX_RAW_BYTES:
         buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        return buf.getvalue()
-    return image_data
+        img = img.resize((int(new_w * 0.7), int(new_h * 0.7)), PILImage.LANCZOS)
+        img.save(buf, format="JPEG", quality=60)
+    return buf.getvalue()
 
 
 def parse_image_request(concept_text):
@@ -419,7 +429,10 @@ Write the Python code now. Output ONLY valid Python code."""}
             render_data = f.read()
 
         render_b64 = base64.b64encode(render_data).decode()
-        review_b64 = base64.b64encode(compress_for_review(render_data)).decode()
+        review_data = compress_for_review(render_data)
+        review_b64 = base64.b64encode(review_data).decode()
+        # If compressed, it's JPEG; otherwise original PNG
+        review_media_type = "image/jpeg" if len(render_data) > 3_500_000 else "image/png"
 
         # ============================================================
         # PASS 3 — ART DIRECTOR REVIEW: Critique and improve
@@ -465,7 +478,7 @@ Fix all issues. Keep the same visual concept but improve execution. Write IMPROV
                         "type": "image",
                         "source": {
                             "type": "base64",
-                            "media_type": "image/png",
+                            "media_type": review_media_type,
                             "data": review_b64
                         }
                     }
