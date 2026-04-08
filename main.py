@@ -249,6 +249,27 @@ def execute_code(code, tmpdir):
     return True, output_path
 
 
+def compress_for_output(image_data, max_bytes=2_000_000):
+    """Compress final image for n8n response. Returns (base64_string, format).
+    n8n Cloud has tight memory limits, so keep response under ~3MB base64."""
+    from PIL import Image as PILImage
+    # Try PNG first — if small enough, keep it
+    if len(image_data) <= max_bytes:
+        return base64.b64encode(image_data).decode(), "png"
+    # Convert to high-quality JPEG
+    img = PILImage.open(io.BytesIO(image_data)).convert("RGB")
+    for quality in [90, 80, 70, 60]:
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=quality)
+        if buf.tell() <= max_bytes:
+            return base64.b64encode(buf.getvalue()).decode(), "jpeg"
+    # Last resort: scale down + JPEG
+    img = img.resize((int(img.width * 0.7), int(img.height * 0.7)), PILImage.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=70)
+    return base64.b64encode(buf.getvalue()).decode(), "jpeg"
+
+
 def compress_for_review(image_data):
     """Compress image to stay under Anthropic's 5MB base64 limit.
     Base64 adds ~33% overhead, so raw data must stay under ~3.5MB."""
@@ -428,7 +449,6 @@ Write the Python code now. Output ONLY valid Python code."""}
         with open(result, "rb") as f:
             render_data = f.read()
 
-        render_b64 = base64.b64encode(render_data).decode()
         review_data = compress_for_review(render_data)
         review_b64 = base64.b64encode(review_data).decode()
         # If compressed, it's JPEG; otherwise original PNG
@@ -492,23 +512,21 @@ Fix all issues. Keep the same visual concept but improve execution. Write IMPROV
         success2, result2 = execute_code(revised_code, tmpdir)
 
         if not success2:
-            # If revision fails, return the first render
+            # If revision fails, return the first render (compressed)
+            out_b64, out_fmt = compress_for_output(render_data)
             return {
-                "image": render_b64,
-                "format": "png",
-                "code_used": code,
-                "concept": creative_concept,
+                "image": out_b64,
+                "format": out_fmt,
                 "note": "Review pass failed, returning initial render"
             }
 
         with open(result2, "rb") as f:
-            final_data = base64.b64encode(f.read()).decode()
+            final_raw = f.read()
 
+        out_b64, out_fmt = compress_for_output(final_raw)
         return {
-            "image": final_data,
-            "format": "png",
-            "code_used": revised_code,
-            "concept": creative_concept
+            "image": out_b64,
+            "format": out_fmt
         }
 
 
