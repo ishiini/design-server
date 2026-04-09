@@ -92,6 +92,19 @@ def extract_content_data(brief):
 # PASS 1 — IMAGE GENERATION (gpt-image-1)
 # ============================================================
 
+def extract_visual_direction(brief):
+    """Extract only the strategic/visual direction from the brief.
+    Strips out Section 1 content data so gpt-image-1 doesn't try to render text."""
+    section2_match = re.search(
+        r'SECTION 2.*?STRATEGIC BRIEF\s*\n(.*?)(?:\Z)',
+        brief, re.DOTALL | re.IGNORECASE
+    )
+    if section2_match:
+        return section2_match.group(1).strip()
+    # Fallback: return the whole brief
+    return brief
+
+
 def generate_poster_image(brief, work_type):
     """Generate the poster visual with gpt-image-1. No text in image."""
     size_map = {
@@ -101,13 +114,18 @@ def generate_poster_image(brief, work_type):
     }
     size = size_map.get(work_type, "1024x1536")
 
-    image_prompt = f"""Create the visual layer for a {work_type}. No text, no letters, no numbers, no words anywhere in the image. Typography will be added separately.
+    # Only send visual/strategic direction to image gen — NOT the text content
+    visual_direction = extract_visual_direction(brief)
+
+    image_prompt = f"""Create the visual layer for a {work_type}.
+
+ABSOLUTE RULE: No text, no letters, no numbers, no words, no titles, no names anywhere in the image. This image is purely visual — all typography is handled separately. If you include ANY text at all, the output is unusable.
 
 Leave breathing room at the top and bottom of the canvas for text to be overlaid later.
 
-The brief below contains all the creative direction — follow it closely. If it names an artist, match that artist's visual language. If it specifies a color palette, use those colors. If it describes a mood or style, that is the style.
+The creative direction below describes the visual style, mood, and composition. Follow it closely:
 
-{brief}"""
+{visual_direction}"""
 
     response = httpx.post(
         "https://api.openai.com/v1/images/generations",
@@ -123,7 +141,7 @@ The brief below contains all the creative direction — follow it closely. If it
     )
     response.raise_for_status()
     data = response.json()
-    return base64.b64decode(data["data"][0]["b64_json"])
+    return base64.b64decode(data["data"][0]["b64_json"]), image_prompt
 
 
 # ============================================================
@@ -428,12 +446,14 @@ CREATIVE DIRECTION:
 {brief}
 
 OUTPUT: A complete, valid SVG document. The logo should be:
-- Clean vector shapes only — no raster images, no filters, no bitmap effects
+- Clean vector shapes with SOLID FILL COLORS — every shape must have an explicit fill attribute with a visible color
+- White or light background (add a white rect as the first element: <rect width="512" height="512" fill="white"/>)
 - Viewbox 0 0 512 512 (square, scalable)
 - Maximum 3 colors plus black/white
 - Simple, memorable, and professional
-- Include the brand name as text using a clean sans-serif font (font-family: sans-serif)
-- The logomark (icon/symbol) should work without the text too
+- Include the brand name as text below or beside the logomark using font-family="sans-serif" with a visible fill color
+- The logomark (icon/symbol) should be bold and clearly visible — no thin strokes, use filled shapes
+- Do NOT use stroke-only shapes. Use fill. Every visible element needs a fill color that contrasts against the white background.
 
 Write ONLY the SVG code. Start with <svg and end with </svg>. No explanations, no markdown fences."""
             }],
@@ -502,7 +522,7 @@ async def generate_design(request: dict):
         # === POSTER / SOCIAL PIPELINE (raster) ===
         # PASS 1 — Generate poster visual
         print("PASS 1: Generating poster image...")
-        image_bytes = generate_poster_image(prompt, work_type)
+        image_bytes, image_prompt_used = generate_poster_image(prompt, work_type)
         print(f"PASS 1 complete: {len(image_bytes)} bytes")
 
         # UPSCALE to target resolution for sharp text rendering
@@ -537,8 +557,10 @@ async def generate_design(request: dict):
 
         # PASS 4 — Critique
         print("PASS 4: Critiquing design...")
+        critique_result = None
         try:
             critique = critique_design(composed, prompt, work_type)
+            critique_result = critique
             score = critique.get("score", 7)
             print(f"PASS 4 complete: score={score}, approved={critique.get('approved', True)}")
 
@@ -570,7 +592,13 @@ async def generate_design(request: dict):
         out_b64, out_fmt = compress_for_output(composed)
         return {
             "image": out_b64,
-            "format": out_fmt
+            "format": out_fmt,
+            "debug": {
+                "image_prompt": image_prompt_used,
+                "content_data_extracted": content_data,
+                "text_placement": placement,
+                "critique": critique_result
+            }
         }
 
     except Exception as e:
